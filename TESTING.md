@@ -319,10 +319,15 @@ case does the opposite by design: it requires one successful, attributed
 `Compatibility` observation of both complete planes (16 MiB), composes from a
 separate CPU cache, leaves the board shadows stale and protected, and matches
 the software oracle. It is not a fallback from direct presentation.
+Three CPU command-ABI tests lock the 64-byte command and 256-byte state-slot
+packing, normalized fill capture, and bounded transactional payload ranges.
+The hardware fill cases consume the same records through WGSL and retain
+overlapping command order across bounded batch reuse.
 
 ```sh
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag resident_ -- --test-threads=1
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag dev::ng1::rex3_flat_fill::tests -- --test-threads=1
+cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag dev::ng1::wgpu::command::tests -- --test-threads=1
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag direct_ng1_scanout_ -- --test-threads=1
 REX3_RESIDENT_BACKEND=vulkan cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag resident_gpu_ -- --ignored --nocapture --test-threads=1
 REX3_RESIDENT_BACKEND=vulkan cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag dev::ng1::wgpu::direct_tests -- --ignored --nocapture --test-threads=1
@@ -345,8 +350,8 @@ Remove-Item Env:\IRIS_NO_JIT -ErrorAction SilentlyContinue
 .\scripts\test-resident-gate.ps1
 ```
 
-The script requires 25 `resident_` CPU tests, three flat-fill tests and two
-direct-state tests, then **10 resident GPU tests and eight direct
+The script requires 25 `resident_` CPU tests, three flat-fill tests, three
+command-ABI tests and two direct-state tests, then **10 resident GPU tests and eight direct
 scanout tests on each backend**. It checks each libtest pass count, rejects
 hardware skips and prints the selected adapter; both Vulkan and D3D12 must
 succeed for the full gate. `.\scripts\test-resident-gate.ps1 -Backend vulkan`
