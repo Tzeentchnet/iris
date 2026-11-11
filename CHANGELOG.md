@@ -115,13 +115,14 @@ hashes are given where a change is easiest to understand by reading the commit.
   `raster = "wgpu"` rather than silently ignoring it; that selector remains
   unavailable until M3.
 - A separate, internal test-only resident path now exercises full linear RGB
-  and auxiliary planes, GFIFO-ordered flat fills and same-device scanout.
+  and auxiliary planes, GFIFO-ordered drawing, staged HostW blocks/spans and
+  same-device scanout.
   Page-protected tests check that ordinary frames have no raw-plane transfer,
   CPU-plane access or CPU fallback. Raw-plane observation is explicit and
   selected; screenshots, VNC and headless capture read the composed frame.
   Device loss is fatal on this path. It is not selectable in the emulator;
-  HOSTR, snapshots, other raw consumers and complete opcode and lifecycle
-  coverage remain future work. Cached decoded DID uploads still make direct
+  HOSTR, host lines, snapshots, other raw consumers and complete opcode and
+  lifecycle coverage remain future work. Cached decoded DID uploads still make direct
   scanout's small-state/GPU-DID milestone partial.
 - A strict synthetic REX3 replay corpus (`src/dev/ng1/testdata`) checks the
   interpreter, the Cranelift JIT and the GPU engine against one another; Linux
