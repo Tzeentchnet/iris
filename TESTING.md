@@ -440,11 +440,11 @@ Remove-Item Env:\IRIS_NO_JIT -ErrorAction SilentlyContinue
 .\scripts\test-resident-gate.ps1
 ```
 
-The exact 100-case script requires 28 `resident_` CPU tests, four flat-fill tests, two line
+The exact 102-case script requires 28 `resident_` CPU tests, four flat-fill tests, two line
 tests, two HostW walker tests, one HostW interpreter/JIT source test, one
 shade-DDA test, one pattern-state test, two resident HostR port/retirement
 tests, three command-ABI tests and two
-direct-state tests, then **19 resident GPU tests and eight direct
+direct-state tests, then **19 resident GPU tests and nine direct
 scanout tests on each backend**. It checks each libtest pass count, rejects
 hardware skips and prints the selected adapter; both Vulkan and D3D12 must
 succeed for the full gate. `.\scripts\test-resident-gate.ps1 -Backend vulkan`
@@ -453,6 +453,16 @@ two-backend gate. For manual PowerShell runs set
 `$env:REX3_RESIDENT_BACKEND = 'vulkan'` or `'dx12'` before each command
 instead of the shell prefix. A host that lacks either required hardware
 backend cannot claim the complete gate. Metal is not covered by this script.
+
+The direct group covers the explicit resident frontend matrix: CPU
+software/GL composition, CPU planes through wgpu scanout, same-device
+resident wgpu scanout, and explicitly labeled resident readback through the
+ordinary CPU renderer. Both resident modes exercise transactional screenshot,
+headless frame and loopback VNC capture. Capture failures must keep tickets
+pending, preserve the last published pixels and `frame_seq`, and leave the
+selected display mode unchanged. Assertions distinguish per-mode composed
+capture attempts, successes and bytes from attributed raw-plane
+`Compatibility` observations.
 
 To deliberately regenerate, set `REX3_CORPUS_OUT` to an existing relative
 directory with a pre-existing regular `.rex3-corpus-root` file and run
