@@ -573,9 +573,10 @@ deliberately slow and never an automatic fallback. M2 is complete within this
 gated test-only scope. Live activation remains gated on M3 opcode coverage,
 and `iris-gui` cannot select this mode.
 
-The Windows gate `.\scripts\test-resident-gate.ps1` checks 94 cases: 25
+The Windows gate `.\scripts\test-resident-gate.ps1` checks 95 cases: 25
 resident CPU, 4 flat-fill, 2 line, 1 shade-DDA, 1 pattern-state, 3 command-ABI
-and 2 direct-state tests, 2 HostW walker tests, plus 19
+and 2 direct-state tests, 2 HostW walker tests, 1 HostW interpreter/JIT source
+oracle, plus 19
 resident GPU and 8
 direct-scanout tests on each of Vulkan and D3D12. It requires the named
 backend on an integrated/discrete adapter and fails rather than skipping
@@ -714,9 +715,23 @@ underfed final qword; segmented rows discard residual fields at the same outer
 GO boundary as the CPU model. The shader fetches host data before clipping or
 pixel rejection, and no CPU framebuffer pointer reaches this path.
 
-Host patterns, shade, endpoint skips, LENGTH32, LR-only shapes, host lines,
-zoom segment coalescing and producer/wraparound stress remain explicit errors
-for later focused M4 slices. HOSTR remains M5 work.
+At that first-slice boundary, host patterns, shade, endpoint skips, LENGTH32,
+LR-only shapes, host lines, zoom segment coalescing and producer/wraparound
+stress were explicit errors.
+
+The second M4 slice extends that transactional walker and serial command to
+transparent and opaque Z/line patterns, shade DDA, endpoint skips, LENGTH32
+continuation and LR-only BLOCK/SPAN behavior. Pattern suppression and opaque
+`COLORBACK` selection happen before HostRW consumption; shade and both pattern
+machines still advance on every visit, including clipped, skipped, transparent
+and rejected visits. Row reset preserves `LSRCOUNT`, and restored noncanonical
+pattern-bit positions use the generic walker's scalar transition. The segment
+matrix covers COLORHOST, ALPHAHOST and both with shade, clipping, row reset,
+increasing and decreasing LR-only shapes, and command-free transfers whose
+architectural state still retires. An interpreter/Cranelift oracle now pins
+that COLORHOST overrides shaded RGB and that ALPHAHOST alone does not disable
+FASTCLEAR. Resident FASTCLEAR+ALPHAHOST, host lines, zoom coalescing and
+producer/wraparound stress remain deferred; HOSTR remains M5 work.
 
 Complete when ordinary and zoomed pixmaps match CPU mode with no CPU
 framebuffer store and no per-qword GPU submission.

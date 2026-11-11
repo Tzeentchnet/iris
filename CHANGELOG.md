@@ -116,7 +116,10 @@ hashes are given where a change is easiest to understand by reading the commit.
   unavailable until M3.
 - A separate, internal test-only resident path now exercises full linear RGB
   and auxiliary planes, GFIFO-ordered drawing, staged HostW blocks/spans and
-  same-device scanout.
+  same-device scanout. HostW segments now preserve shade, transparent/opaque
+  patterns, endpoint skips, LENGTH32 and LR-only behavior without CPU
+  framebuffer access. The generic and Cranelift paths also agree that
+  COLORHOST overrides shaded RGB and ALPHAHOST alone preserves FASTCLEAR.
   Page-protected tests check that ordinary frames have no raw-plane transfer,
   CPU-plane access or CPU fallback. Raw-plane observation is explicit and
   selected; screenshots, VNC and headless capture read the composed frame.
