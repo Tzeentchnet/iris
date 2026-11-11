@@ -609,9 +609,12 @@ initial display-state transfer is below 128 KiB. CPU-oracle parity covers
 disabled DID, malformed pointers, table termination, zero scanline length and
 dimension changes on Vulkan and D3D12. A mode-table fence published after the
 cut defers the frame rather than forcing fence progress or presenting stale
-state. GL and presenters using another device are rejected. Screenshot,
-frame request, VNC and headless test capture read the composed output only,
-and publish pixels and complete requests only after a successful copy/map.
+state. The real common wgpu presenter is tested with a winit window and
+surface on the resident device on both backends; it presents the composed
+buffer without a plane transfer. GL and presenters using another device are
+rejected. Screenshot, frame request, VNC and headless test capture read the
+composed output only, and publish pixels and complete requests only after a
+successful copy/map.
 After the initial seed, ordinary resident frames and idle/fence processing
 perform no raw-plane transfer, CPU-plane access or CPU raster fallback.
 Raw-plane observations explicitly select RGB, auxiliary or both, and return
