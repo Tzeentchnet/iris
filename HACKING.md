@@ -611,10 +611,14 @@ dimension changes on Vulkan and D3D12. A mode-table fence published after the
 cut defers the frame rather than forcing fence progress or presenting stale
 state. The real common wgpu presenter is tested with a winit window and
 surface on the resident device on both backends; it presents the composed
-buffer without a plane transfer. GL and presenters using another device are
-rejected. Screenshot, frame request, VNC and headless test capture read the
-composed output only, and publish pixels and complete requests only after a
-successful copy/map.
+buffer without a plane transfer. An explicitly selected compatibility display
+instead attributes a full two-plane observation to `Compatibility`, copies
+the 16 MiB snapshot into a separate CPU screen cache and calls the ordinary
+renderer. It does not acknowledge the board's CPU shadows and is never an
+automatic fallback. GL and presenters using another device are rejected by
+the direct path. Screenshot, frame request, VNC and headless test capture read
+the composed output only, and publish pixels and complete requests only after
+a successful copy/map.
 After the initial seed, ordinary resident frames and idle/fence processing
 perform no raw-plane transfer, CPU-plane access or CPU raster fallback.
 Raw-plane observations explicitly select RGB, auxiliary or both, and return
