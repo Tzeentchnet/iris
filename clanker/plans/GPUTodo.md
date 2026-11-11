@@ -573,8 +573,8 @@ deliberately slow and never an automatic fallback. M2 is complete within this
 gated test-only scope. Live activation remains gated on M3 opcode coverage,
 and `iris-gui` cannot select this mode.
 
-The Windows gate `.\scripts\test-resident-gate.ps1` checks 78 cases: 25
-resident CPU, 4 flat-fill, 2 line, 3 command-ABI and 2 direct-state tests, plus 13
+The Windows gate `.\scripts\test-resident-gate.ps1` checks 80 cases: 25
+resident CPU, 4 flat-fill, 2 line, 3 command-ABI and 2 direct-state tests, plus 14
 resident GPU and 8
 direct-scanout tests on each of Vulkan and D3D12. It requires the named
 backend on an integrated/discrete adapter and fails rather than skipping
@@ -637,8 +637,18 @@ all 16 logic operations, WRMASK, ordered 4x4 Bayer dithering and YFLIP.
 Dither coordinates are recovered from the original REX3 walker position, not
 the moved, windowed or flipped framebuffer address. Fast clears retain their
 direct replicated `COLORVRAM` path. Complete-plane CPU-oracle parity covers
-these modes for blocks and lines on Vulkan and D3D12. Z, stipple, shade and
-blend behavior remain separate M3 work.
+these modes for blocks and lines on Vulkan and D3D12.
+
+The blending slice expands the selected destination slot to 24-bit color,
+implements all defined source and destination factor selectors with exact
+integer division and saturation, and honors `BLENDALPHA` and `BACKBLEND`.
+The result then follows the ordinary dither, compression, amplification and
+WRMASK stages; logic operations are bypassed while blending is active.
+Destination hazard flags are omitted only for `BACKBLEND`, which reads
+`COLORBACK` instead of the resident plane. A complete 6x6 factor matrix plus
+lower-depth, auxiliary, background, dithered and line cases matches the CPU
+oracle on both hardware backends. Z, stipple and shade behavior remain
+separate M3 work.
 
 ### M4 - HostW staging
 
