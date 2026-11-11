@@ -120,16 +120,18 @@ hashes are given where a change is easiest to understand by reading the commit.
   transfers preserve shade, transparent/opaque patterns, endpoint skips,
   LENGTH32, single-step and LR-only behavior without CPU framebuffer access.
   Line payloads remain immutable HostRW qwords and execute as one serial GPU
-  command, including outer multiword retries. The generic and Cranelift paths
-  also agree that COLORHOST overrides shaded RGB and ALPHAHOST alone preserves
-  FASTCLEAR.
+  command, including outer multiword retries. Consecutive HostW commands now
+  share one ordered batch and GPU submission, so `glPixelZoom` keeps one
+  architectural source-pixel block per command without submitting once per
+  qword. The generic and Cranelift paths also agree that COLORHOST overrides
+  shaded RGB and ALPHAHOST alone preserves FASTCLEAR.
   Page-protected tests check that ordinary frames have no raw-plane transfer,
   CPU-plane access or CPU fallback. Raw-plane observation is explicit and
   selected; screenshots, VNC and headless capture read the composed frame.
   Device loss is fatal on this path. It is not selectable in the emulator;
-  HOSTR, zoom coalescing, snapshots, other raw consumers and complete opcode
-  and lifecycle coverage remain future work. Cached decoded DID uploads still
-  make direct scanout's small-state/GPU-DID milestone partial.
+  HOSTR, snapshots, other raw consumers and complete opcode and lifecycle
+  coverage remain future work. Cached decoded DID uploads still make direct
+  scanout's small-state/GPU-DID milestone partial.
 - A strict synthetic REX3 replay corpus (`src/dev/ng1/testdata`) checks the
   interpreter, the Cranelift JIT and the GPU engine against one another; Linux
   CI runs its CPU half. See `TESTING.md`.
