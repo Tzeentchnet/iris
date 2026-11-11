@@ -128,7 +128,10 @@ hashes are given where a change is easiest to understand by reading the commit.
   and VDMA producers, GFIFO ring wrap, and repeated bounded payload/state/GPU
   set reuse are checked against complete CPU planes. The generic and Cranelift
   paths also agree that COLORHOST overrides shaded RGB and ALPHAHOST alone
-  preserves FASTCLEAR.
+  preserves FASTCLEAR. Resident FASTCLEAR+ALPHAHOST fills and lines now consume
+  and retire their HostRW fields but write replicated `COLORVRAM`, bypassing
+  shade, patterns, alpha comparison, logic, blending and dithering while
+  retaining clipping and WRMASK.
   Page-protected tests check that ordinary frames have no raw-plane transfer,
   CPU-plane access or CPU fallback. Raw-plane observation is explicit and
   selected; screenshots, VNC and headless capture read the composed frame.
