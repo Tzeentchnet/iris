@@ -332,6 +332,10 @@ completion with the CPU walker across all octants, both BRESROUND tie modes,
 fractional endpoints, skip-first/last and antialiased endpoint filtering. The
 hardware line case executes integer, fractional and antialiased commands
 against complete seeded RGB and auxiliary planes on both backends.
+The hardware clipping case compares complete planes after offset blocks and
+lines using SMASK0, OR-combined SMASK1-4 and CIDMATCH. It also verifies that a
+CID write earlier in one ordered batch affects a later overlapping RGB
+command without a submission boundary.
 
 ```sh
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag resident_ -- --test-threads=1
@@ -361,7 +365,7 @@ Remove-Item Env:\IRIS_NO_JIT -ErrorAction SilentlyContinue
 ```
 
 The script requires 25 `resident_` CPU tests, four flat-fill tests, two line
-tests, three command-ABI tests and two direct-state tests, then **11 resident GPU tests and eight direct
+tests, three command-ABI tests and two direct-state tests, then **12 resident GPU tests and eight direct
 scanout tests on each backend**. It checks each libtest pass count, rejects
 hardware skips and prints the selected adapter; both Vulkan and D3D12 must
 succeed for the full gate. `.\scripts\test-resident-gate.ps1 -Backend vulkan`

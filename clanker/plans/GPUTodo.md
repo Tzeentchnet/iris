@@ -573,8 +573,8 @@ deliberately slow and never an automatic fallback. M2 is complete within this
 gated test-only scope. Live activation remains gated on M3 opcode coverage,
 and `iris-gui` cannot select this mode.
 
-The Windows gate `.\scripts\test-resident-gate.ps1` checks 74 cases: 25
-resident CPU, 4 flat-fill, 2 line, 3 command-ABI and 2 direct-state tests, plus 11
+The Windows gate `.\scripts\test-resident-gate.ps1` checks 76 cases: 25
+resident CPU, 4 flat-fill, 2 line, 3 command-ABI and 2 direct-state tests, plus 12
 resident GPU and 8
 direct-scanout tests on each of Vulkan and D3D12. It requires the named
 backend on an integrated/discrete adapter and fails rather than skipping
@@ -622,8 +622,14 @@ without rerunning setup or walking a full bounding box. All octants,
 BRESROUND ties, fractional endpoints, skip-first/last, AWEIGHT endpoint
 filtering, RGB/auxiliary writes and exact `XSTART`/`YSTART`/`BRESD` completion
 match the CPU oracle on Vulkan and D3D12. Length-32/single-step continuation,
-clipping, stipples and the general pixel-operation pipeline remain later M3
-slices.
+stipples and the general pixel-operation pipeline remain later M3 slices.
+
+The destination-clipping slice adds `XYOFFSET`/`XYMOVE`, window-relative
+SMASK0, OR-combined absolute SMASK1-4 and CIDMATCH to both fills and lines.
+CID reads use the ordered auxiliary tile value, so a preceding command in the
+same batch can change which later RGB or auxiliary writes pass. Bounds remain
+conservative while shader lanes apply the exact CPU address tests. YFLIP,
+stipple, shade, compare, logic, blend and dither remain separate M3 work.
 
 ### M4 - HostW staging
 
