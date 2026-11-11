@@ -144,11 +144,15 @@ hashes are given where a change is easiest to understand by reading the commit.
   compatibility mode; renderer rejection and screenshot, VNC or headless
   capture demand cannot silently switch it. Those consumers publish only a
   successfully staged composed frame, while raw compatibility observations
-  and per-mode composed-capture traffic have separate counters. Device loss
-  is fatal on this path. It is not selectable in the emulator; snapshots,
-  other raw consumers and complete opcode and lifecycle coverage remain
-  future work. Cached decoded DID uploads still make direct scanout's
-  small-state/GPU-DID milestone partial.
+  and per-mode composed-capture traffic have separate counters. Stopped
+  snapshots now capture register/continuation state and both complete
+  authoritative planes atomically; restore uploads a new GPU epoch before
+  publishing registers or allowing restart. Disk snapshots, CI rollback,
+  debugger checkpoints, reset and a second Newport head use the same
+  fail-closed transaction without refreshing stale CPU shadows. Device loss
+  is fatal on this path. It is not selectable in the emulator; other raw
+  consumers and live activation remain future work. Cached decoded DID
+  uploads still make direct scanout's small-state/GPU-DID milestone partial.
 - A strict synthetic REX3 replay corpus (`src/dev/ng1/testdata`) checks the
   interpreter, the Cranelift JIT and the GPU engine against one another; Linux
   CI runs its CPU half. See `TESTING.md`.
