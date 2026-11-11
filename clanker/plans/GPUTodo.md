@@ -1,7 +1,7 @@
 # REX3 proper GPU mode: implementation plan
 
-Status: in progress 2026-11-11. M0 is complete; M1 is complete for the
-gated, test-only resident slice; minimum M2 is partial. No production
+Status: in progress 2026-11-11. M0 is complete; M1 and M2 are complete for
+the gated, test-only resident slice; M3 is in progress. No production
 GPU-authoritative Newport mode has landed, and live `raster = "wgpu"`
 remains rejected until M3. The tile-binned `IRIS_REX3_GPU` prototype is
 separate and CPU-canonical, not the target architecture.
@@ -573,8 +573,8 @@ deliberately slow and never an automatic fallback. M2 is complete within this
 gated test-only scope. Live activation remains gated on M3 opcode coverage,
 and `iris-gui` cannot select this mode.
 
-The Windows gate `.\scripts\test-resident-gate.ps1` checks 70 cases: 25
-resident CPU, 4 flat-fill, 3 command-ABI and 2 direct-state tests, plus 10
+The Windows gate `.\scripts\test-resident-gate.ps1` checks 74 cases: 25
+resident CPU, 4 flat-fill, 2 line, 3 command-ABI and 2 direct-state tests, plus 11
 resident GPU and 8
 direct-scanout tests on each of Vulkan and D3D12. It requires the named
 backend on an integrated/discrete adapter and fails rather than skipping
@@ -587,7 +587,7 @@ when unavailable; a single-backend run is not the complete gate. See
 - [x] Use fixed buffers/bind groups and bounded reusable batch sets.
 - [x] Preserve ordered per-tile command lists.
 - [x] Implement blocks, spans and clears.
-- [ ] Implement integer, fractional and antialiased lines.
+- [x] Implement integer, fractional and antialiased lines.
 - [ ] Implement RGB, auxiliary/CID/overlay and Z effects.
 - [ ] Implement clipping, stipples, masks, logic operations, blending and
       dithering.
@@ -612,8 +612,18 @@ command kinds. Resident blocks accept consistent increasing or decreasing X/Y
 directions, spans retain the hardware's left-to-right walk, and active fast
 clears use the canonical REX3 mode fold and replicated `COLORVRAM` value
 rather than COLORI or a destination read. WRMASK and RGB/auxiliary plane
-selection remain exact. Clipping, stipples, continuation, line families and
-the general pixel-operation pipeline remain later M3 slices.
+selection remain exact. Clipping, stipples, continuation and the general
+pixel-operation pipeline remain later M3 slices.
+
+The line slice adds distinct integer, fractional and antialiased command
+kinds. It consumes the post-setup Bresenham state, records one bounded payload
+word per major-axis position, and lets each shader lane test coverage in O(1)
+without rerunning setup or walking a full bounding box. All octants,
+BRESROUND ties, fractional endpoints, skip-first/last, AWEIGHT endpoint
+filtering, RGB/auxiliary writes and exact `XSTART`/`YSTART`/`BRESD` completion
+match the CPU oracle on Vulkan and D3D12. Length-32/single-step continuation,
+clipping, stipples and the general pixel-operation pipeline remain later M3
+slices.
 
 ### M4 - HostW staging
 
