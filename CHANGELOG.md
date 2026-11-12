@@ -123,8 +123,12 @@ hashes are given where a change is easiest to understand by reading the commit.
   command, including outer multiword retries. Consecutive HostW commands now
   share one ordered batch and GPU submission, so `glPixelZoom` keeps one
   architectural source-pixel block per command without submitting once per
-  qword. The generic and Cranelift paths also agree that COLORHOST overrides
-  shaded RGB and ALPHAHOST alone preserves FASTCLEAR.
+  qword. Bulk VDMA HostW reservations now return `BUS_BUSY` without publishing
+  a partial GFIFO transfer, so retries cannot duplicate pixels. Concurrent PIO
+  and VDMA producers, GFIFO ring wrap, and repeated bounded payload/state/GPU
+  set reuse are checked against complete CPU planes. The generic and Cranelift
+  paths also agree that COLORHOST overrides shaded RGB and ALPHAHOST alone
+  preserves FASTCLEAR.
   Page-protected tests check that ordinary frames have no raw-plane transfer,
   CPU-plane access or CPU fallback. Raw-plane observation is explicit and
   selected; screenshots, VNC and headless capture read the composed frame.
