@@ -572,6 +572,31 @@ fn resident_lifecycle_machine_head1_checkpoint_round_trip() {
 }
 
 #[test]
+fn resident_direct_rejects_cpu_plane_debug_overlays() {
+    on_large_stack(|| {
+        let (_owner, rex, _state, _rgb_guard, _aux_guard) = fixture();
+        *rex.resident_display_mode.lock() = Some(ResidentDisplayMode::DirectWgpu);
+
+        for (command, args) in [
+            ("rex", &["cmap", "on"][..]),
+            ("disp", &["debug", "on"][..]),
+        ] {
+            let error = rex.execute_command(command, args, Box::new(io::sink())).unwrap_err();
+            assert!(error.contains("unavailable in resident direct mode"), "{error}");
+        }
+        assert!(!rex.show_cmap.load(Ordering::Relaxed));
+        assert!(!rex.show_disp_debug.load(Ordering::Relaxed));
+
+        #[cfg(feature = "developer")]
+        {
+            let error = rex.execute_command("draw", &["debug", "on"], Box::new(io::sink())).unwrap_err();
+            assert!(error.contains("unavailable in resident direct mode"), "{error}");
+            assert!(!rex.draw_debug.load(Ordering::Relaxed));
+        }
+    });
+}
+
+#[test]
 fn resident_lifecycle_invalid_inputs_cannot_mix_staged_snapshots() {
     on_large_stack(|| {
         let (_owner, rex, data, _rgb_guard, _aux_guard) = fixture();
