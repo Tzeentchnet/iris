@@ -266,8 +266,10 @@ stale pixels even when the later final state matches:
 REX3_GPU_BACKEND=vulkan cargo test -p iris --lib --features rex-gpu,rex-jit,rexdiag rex3_corpus_gpu_ -- --ignored --nocapture --test-threads=1
 ```
 
-The separate **test-only resident Newport raster** has CPU-only limit,
-status and GFIFO gate tests, plus ignored hardware parity tests. The hardware
+The **resident Newport raster** has CPU-only limit, status and GFIFO gate
+tests, plus ignored hardware parity tests. Production activation uses the same
+backend; the hardware tests retain direct injection so they can isolate plane
+authority, ordering and failure behavior. The hardware
 tests require the named hardware adapter/backend rather than silently skipping;
 they compare both complete linear planes and the final architectural
 `Rex3Context` with the CPU oracle, including overlapping fills, clipping,
@@ -275,8 +277,8 @@ masks, tile boundaries, retries, and offscreen columns. They exercise the real
 GFIFO, reset, and partial-prefix restore. Scissor/CID clip modes outside the
 gated slice are rejected without advancing context or falling back. Explicit
 observation selects RGB, auxiliary or both and returns a snapshot; installing
-and acknowledging a CPU shadow is separate. These tests do not enable resident
-raster or direct scanout in a running emulator.
+and acknowledging a CPU shadow is separate. These tests do not depend on the production configuration selector; live
+activation is validated separately below.
 
 The opt-in CPU-plane residency tripwire copies each board shadow into its own
 page-aligned OS mapping, seeds the GPU, then protects both complete mappings.
@@ -303,9 +305,10 @@ published frame sequence. Additional cases inject loss into the shared
 asynchronous device-error sink before and after submission and while idle,
 including a full GFIFO and a full ordinary machine event queue. They require
 a single first-fault notification and reject restart.
-These tests opt in to the test-only display worker; they do not enable resident
-raster in the emulator. They do not complete board-level snapshot or monitor
-consumers, full opcode/lifecycle coverage, or live-window validation.
+These tests opt in to the manual display seam rather than production startup,
+so failures remain attributable to scanout/capture behavior. Production tests
+and live runs cover automatic startup, board-level snapshot/monitor consumers
+and the visible same-device window.
 Resident refresh skips CPU DID decoding. A GPU kernel expands changed VC2 DID
 tables before scanout, and traffic assertions require zero decoded-map uploads
 and less than 128 KiB for the complete initial display-state transfer. The
@@ -440,7 +443,7 @@ Remove-Item Env:\IRIS_NO_JIT -ErrorAction SilentlyContinue
 .\scripts\test-resident-gate.ps1
 ```
 
-The exact 129-case script requires 43 `resident_` CPU tests, four flat-fill
+The exact 130-case script requires 44 `resident_` CPU tests, four flat-fill
 tests, two line tests, two HostW walker tests, one HostW interpreter/JIT
 source test, one shade-DDA test, one pattern-state test, two resident HostR
 port/retirement tests, three command-ABI tests and two direct-state tests,
@@ -473,6 +476,32 @@ GPU-written planes and both resident display modes while the CPU framebuffer
 mappings remain protected. Missing, duplicate, incomplete or failed snapshot
 halves must not publish registers, pixels, captures or a restartable board.
 Metal remains outside this gate.
+
+Production activation has two additional ignored hardware regressions. They
+construct a normal Newport machine rather than injecting the backend directly:
+both heads must share one `Arc<Gpu>`, repeated peripheral start must leave both
+processor/display workers alive, direct mode must require the same-device
+presenter, and explicit readback mode must advertise its two-second minimum
+capture timeout. Run them on both supported backends:
+
+```powershell
+$env:REX3_RESIDENT_BACKEND = 'vulkan'
+cargo test --locked -p iris --lib --features wgpu production_newport_wgpu_tests -- --ignored --nocapture --test-threads=1
+$env:REX3_RESIDENT_BACKEND = 'dx12'
+cargo test --locked -p iris --lib --features wgpu production_newport_wgpu_tests -- --ignored --nocapture --test-threads=1
+cargo test --locked -p iris --lib --features wgpu power_on_reset_fits_default_service_thread_stack -- --test-threads=1
+```
+
+The final live matrix uses an ordinary `iris` binary and CI socket, not a test
+fixture. For each of Vulkan and D3D12 it boots the embedded PROM in direct
+mode, requests a composed screenshot, saves and restores a disk snapshot,
+performs CI rollback, resets through the monitor, restarts, captures again and
+checks `rex status` for `no_cpu_fallback=true` and zero unsupported work.
+Vulkan additionally exercises a visible same-device wgpu window, explicit
+readback compatibility and a real RFB 3.8 loopback VNC framebuffer update.
+The direct VNC run must show composed direct bytes with zero compatibility raw
+bytes. These runs establish production lifecycle wiring, not representative
+IRIX desktop or application performance.
 
 The M8 cases add checked histogram/delta accounting, exact GFIFO
 full-versus-contention telemetry, bounded-set wait accounting, a 4 ms

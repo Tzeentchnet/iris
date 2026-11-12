@@ -234,6 +234,9 @@ mode           = "nat"
 #board      = "newport"
 #heads      = 1
 #resolution = "guest"
+#raster     = "cpu"         # "wgpu" needs that feature; Newport is experimental and has no CPU fallback
+#newport_mode = "direct"    # Newport wgpu only: "direct" or explicit slow "readback" compatibility
+#gpu_backend = "auto"       # Newport wgpu initially accepts Vulkan or D3D12
 
 # CP0 Count frequency. Default 33 MHz, which IRIX reports as a 66 MHz CPU.
 #[clock]
