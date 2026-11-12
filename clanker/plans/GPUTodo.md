@@ -543,7 +543,7 @@ consumers; the legacy `rex-gpu` replay/live prototype remains CPU-canonical.
 
 - [x] Add a REX3 scanout kernel over the authoritative GPU planes.
 - [x] Upload only small display state/tables needed for each changed frame.
-- [ ] Present through the common wgpu presenter on the same device.
+- [x] Present through the common wgpu presenter on the same device.
 - [x] Add CPU-raster plus wgpu-compositor uploads.
 - [x] Add an eframe wgpu path or explicitly keep proper GPU mode unavailable in
       `iris-gui` until one exists.
@@ -556,19 +556,21 @@ Partial, test-only: a read-only same-device binding and GFIFO frame marker
 order resident fills, direct scanout and a GPU frame consumer. Screenshot,
 frame-request, headless and VNC tests capture composed output only. Ordinary
 frames after seeding have zero raw-plane upload/readback, CPU-plane access
-and CPU fallback. The `WgpuRenderer` has a test-only common-presenter handoff,
-but the marker/presentation tests use a same-device test presenter, not a
-real live window. Resident refresh no longer decodes DID on the CPU. Changed
-VC2 state uploads at most the 64 KiB VC2 RAM and a 32-byte parameter block,
-then a GPU kernel expands DID before scanout; the 2 MiB decoded map is never
-uploaded. The complete initial display-state transfer is below 128 KiB.
-CPU-oracle parity covers disabled DID, malformed pointers, line-table
-termination with stale-row preservation, zero scanline length, and dimension
-changes on Vulkan and D3D12. Live integration and the labeled readback
-compositor mode remain open. `iris-gui` cannot select this mode.
+and CPU fallback. The `WgpuRenderer` common-presenter handoff is exercised
+through a real winit window and surface on the resident device on Vulkan and
+D3D12; the presenter submits and presents a frame without a plane transfer.
+Resident refresh no longer decodes DID on the CPU. Changed VC2 state uploads
+at most the 64 KiB VC2 RAM and a 32-byte parameter block, then a GPU kernel
+expands DID before scanout; the 2 MiB decoded map is never uploaded. The
+complete initial display-state transfer is below 128 KiB. CPU-oracle parity
+covers disabled DID, malformed pointers, line-table termination with
+stale-row preservation, zero scanline length, and dimension changes on Vulkan
+and D3D12. The labeled readback compositor mode remains open. Live activation
+also remains gated on M3 opcode coverage, and `iris-gui` cannot select this
+mode.
 
 The Windows gate `.\scripts\test-resident-gate.ps1` checks 25 resident CPU,
-3 flat-fill and 2 direct-state tests, plus 10 resident GPU and 6
+3 flat-fill and 2 direct-state tests, plus 10 resident GPU and 7
 direct-scanout tests on each of Vulkan and D3D12. It requires the named
 backend on an integrated/discrete adapter and fails rather than skipping
 when unavailable; a single-backend run is not the complete gate. See
