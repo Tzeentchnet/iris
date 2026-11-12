@@ -367,7 +367,8 @@ no-progress retry. It compares complete planes and the full context after
 each direct segment and after the board-level retry on both backends.
 Two CPU HostW walker tests compare transactional completion with the generic
 walker, including restored noncanonical line-pattern phase, and pin the
-remaining fast-clear rejection. A separate interpreter/Cranelift oracle pins
+FASTCLEAR+ALPHAHOST field consumption and retirement. A separate
+interpreter/Cranelift oracle pins
 mixed host-source selection. The hardware HostW case stages PIO and multiword BLOCK/SPAN and line transfers
 and compares both complete planes and full context with the CPU oracle. Its
 segment matrix covers COLORHOST, ALPHAHOST and both, packed and unpacked
@@ -381,7 +382,10 @@ fractional and antialiased lines, BRESROUND state, restored fractional
 endpoint filtering across multiword `LENGTH32` retries, single-step
 continuation, YFLIP/XYOFFSET, shade, transparent and opaque patterns, partial
 clipping, CID and alpha rejection, packed/unpacked input and command-free
-no-progress retirement. A 6x4 `glPixelZoom`-style source grid verifies that
+no-progress retirement. Canonical FASTCLEAR+ALPHAHOST fill and line records
+prove that HostRW fields are consumed while conflicting shade, pattern, alpha,
+logic, blend and dither state is bypassed; complete planes also cover clipping
+and WRMASK. A 6x4 `glPixelZoom`-style source grid verifies that
 24 full-block PIO records remain unsubmitted until one explicit batch flush,
 then match the CPU plane. Overlapping HostW-to-ordinary-to-HostW draws verify
 both ordering boundaries, while the board-level one-slot backend proves that
