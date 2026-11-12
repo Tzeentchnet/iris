@@ -1,10 +1,12 @@
 # REX3 proper GPU mode: implementation plan
 
-Status: in progress 2026-11-11. M0 is complete; M1 and M2 are complete for
-the gated, test-only resident slice; M3 is in progress. No production
-GPU-authoritative Newport mode has landed, and live `raster = "wgpu"`
-remains rejected until M3. The tile-binned `IRIS_REX3_GPU` prototype is
-separate and CPU-canonical, not the target architecture.
+Status: in progress 2026-11-11. M0-M7 are complete for the gated, test-only
+resident path. The M8 telemetry, latency bound and measurement-driven layout
+decisions are implemented; production activation and application-level M8
+acceptance remain open. No production GPU-authoritative Newport mode has
+landed, and live `raster = "wgpu"` remains rejected. The tile-binned
+`IRIS_REX3_GPU` prototype is separate and CPU-canonical, not the target
+architecture.
 
 ## Goal
 
@@ -511,8 +513,8 @@ wgpu 30.0.1 and has no active vendored wgpu-core override to preserve. The
 legacy `rex-gpu` prototype now builds on the common `Arc<Gpu>` and exposes it
 through `GfxDisplay`, so a wgpu window reuses the same device. The prototype
 still synchronizes through its CPU-canonical framebuffer. Newport explicitly
-rejects `raster = "wgpu"` until M3 rather than silently treating that
-selection as CPU raster.
+rejects `raster = "wgpu"` until production activation rather than silently treating
+that selection as CPU raster.
 
 ### M1 - Full authoritative GPU planes
 
@@ -570,14 +572,14 @@ observation to `Compatibility`, copies the snapshots into a separate CPU
 screen cache, and calls the ordinary renderer without acknowledging the
 board's stale CPU shadows. Its 16 MiB full-plane readback per frame is
 deliberately slow and never an automatic fallback. M2 is complete within this
-gated test-only scope. Live activation remains gated on M3 opcode coverage,
-and `iris-gui` cannot select this mode.
+gated test-only scope. Live activation remains gated on production
+configuration and lifecycle integration, and `iris-gui` cannot select this
+mode.
 
-The Windows gate `.\scripts\test-resident-gate.ps1` checks 116 cases: 36
+The Windows gate `.\scripts\test-resident-gate.ps1` checks 129 cases: 43
 resident CPU, 4 flat-fill, 2 line, 1 shade-DDA, 1 pattern-state, 3 command-ABI
 and 2 direct-state tests, 2 HostW walker tests, 1 HostW interpreter/JIT source
-oracle, 2 resident HostR port/retirement tests, plus 21
-resident GPU and 10
+oracle, 2 resident HostR port/retirement tests, plus 24 resident GPU and 10
 direct-scanout tests on each of Vulkan and D3D12. It requires the named
 backend on an integrated/discrete adapter and fails rather than skipping
 when unavailable; a single-backend run is not the complete gate. See
@@ -895,16 +897,70 @@ behavior is exercised by an equivalent gate.
 
 ### M8 - Optimize only after complete live execution
 
-- [ ] Capture representative live Newport workloads.
-- [ ] Record primitive, mode, area and HostRW transfer distributions.
-- [ ] Add GFIFO occupancy/backpressure telemetry.
-- [ ] Tune tile size, active-tile dispatch and batch limits.
-- [ ] Bound batching by both capacity and presentation latency.
-- [ ] Compare full-plane and region HOSTR readback only if HOSTR is material.
-- [ ] Re-run correctness after every scheduling/layout change.
+- [x] Capture a representative, redistributable live Newport workload.
+- [x] Record primitive, mode, area and HostRW transfer distributions.
+- [x] Add GFIFO occupancy/backpressure telemetry.
+- [x] Tune tile size, active-tile dispatch and batch limits.
+- [x] Bound batching by both capacity and presentation latency.
+- [x] Compare full-plane and region HOSTR readback only if HOSTR is material.
+- [x] Re-run correctness after every scheduling/layout change.
 
 Complete when the selected design passes correctness and end-to-end gates on
 representative applications, not only synthetic fills.
+
+The gated implementation now records checked, typed aggregate telemetry for
+primitive and address kinds, mode features, clipped area and tiles, HostW and
+HostR transfer sizes, nonempty batch sizes, flush reasons, command-generation
+and submission time, bounded-set waits, GFIFO occupancy/backpressure and
+frame-cut/presentation latency. Counter overflow, reset/epoch mismatch and
+decreasing snapshots fail closed. Default operation maps no profiling data.
+Explicit profiling waits for each nonempty batch and maps one 64-byte metadata
+record containing timestamps, busy-tile totals and the GPU-generated indirect
+dispatch; it never maps framebuffer data.
+
+Batching now has a 4 ms maximum age in addition to existing state, payload and
+tile-list capacity boundaries. The processor checks that age after each GFIFO
+command, so it cannot split one architectural operation or preempt a bounded
+GPU-set wait. Idle, display, HostR, copy-hazard, observation, restore and exit
+boundaries retain their existing ordering. Empty flush checks are not counted
+as batches.
+
+A local recording of the embedded SGI PROM command monitor exercised real
+guest `hinv`, `printenv`, `help` and `version` redraws without proprietary
+installation media. Aggregate-only replay on both Vulkan and D3D12 executed
+66,741 records, checked 398 reads with zero differences, accepted 20,987
+operations with 206 no-ops and zero unsupported operations, and issued 20,777
+GPU commands. It contained 20,781 draws, two HostW and four HostR operations;
+12,443 draws used Z pattern, 150 used scissor and 109 used CID testing. It did
+not contain copy or line primitives, which remain covered by the independent
+mixed-workload hardware gate.
+
+After excluding empty submit checks, the replay formed 43-51 nonempty batches.
+The latency guard caused 25-31 flushes under the continuously fed replay,
+alongside 13-15 capacity flushes. Eight post-replay direct presentations on
+each backend used no raw or composed readback and reported conservative p95
+bounds of 2.10 ms for render completion and 0.26 ms for the frame cut. These
+are replay/test-path measurements, not guest wall-clock application timing.
+The fastest producer drove GFIFO occupancy to 29,329-29,713 entries, but no
+reservation was refused as full or contended.
+
+The captured HostR traffic was only four requests among 20,987 accepted
+operations. Two generation-keyed selected-plane maps transferred 16 MiB
+total, so region readback is not justified by this evidence. Profiling mapped
+only 43-51 metadata records (2,752-3,264 bytes total), measured
+165,234-167,299 busy tiles and 1,067,889 tile/primitive pairs, and confirmed
+that GPU-generated dispatch matched the busy list. Measurements therefore
+retain 8 x 8 tiles, GPU-generated active-tile dispatch, 1,024 state slots,
+three reusable sets and full selected-plane HostR snapshots.
+
+The exact 129-case Vulkan+D3D12 gate covers the scheduling change and includes
+an independent mixed workload with fills, copies, all line families, HostW,
+HostR, direct presentation and explicit observation. The M8 implementation
+checklist is complete within the gated backend. Its milestone acceptance for
+normal use remains open until the production path runs representative IRIX
+desktop applications and satisfies the end-to-end throughput, CPU-use and
+frame-rate criteria below; the embedded PROM capture does not claim that
+coverage.
 
 ## Validation requirements
 

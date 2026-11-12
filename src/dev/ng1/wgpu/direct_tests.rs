@@ -851,7 +851,7 @@ fn direct_ng1_scanout_gpu_uses_the_board_binding_seam() {
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
 }
 
-fn configure_board_display(rex: &Rex3) {
+pub(super) fn configure_board_display(rex: &Rex3) {
     let display = Display::new();
     *rex.vc2.lock() = display.vc2.into_inner();
     *rex.xmap0.lock() = display.xmap.into_inner();
@@ -904,11 +904,11 @@ fn software_frame(rex: &Rex3, rgb: &[u32], aux: &[u32]) -> Vec<u32> {
     pixels
 }
 
-struct QueuePresenter {
-    gpu: Option<Arc<Gpu>>,
-    accepts: bool,
-    outputs: Arc<Mutex<Vec<wgpu::Buffer>>>,
-    resizes: Arc<Mutex<Vec<(usize, usize)>>>,
+pub(super) struct QueuePresenter {
+    pub(super) gpu: Option<Arc<Gpu>>,
+    pub(super) accepts: bool,
+    pub(super) outputs: Arc<Mutex<Vec<wgpu::Buffer>>>,
+    pub(super) resizes: Arc<Mutex<Vec<(usize, usize)>>>,
 }
 
 struct CompatibilityPresenter {

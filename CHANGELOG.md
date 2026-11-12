@@ -113,7 +113,7 @@ hashes are given where a change is easiest to understand by reading the commit.
   window presenter instead of opening a second device. Its CPU-canonical
   synchronization behavior is unchanged. Newport now rejects
   `raster = "wgpu"` rather than silently ignoring it; that selector remains
-  unavailable until M3.
+  unavailable until production activation is complete.
 - A separate, internal test-only resident path now exercises full linear RGB
   and auxiliary planes, GFIFO-ordered drawing, staged HostW blocks, spans and
   integer/fractional/antialiased lines, and same-device scanout. HostW
@@ -150,9 +150,20 @@ hashes are given where a change is easiest to understand by reading the commit.
   publishing registers or allowing restart. Disk snapshots, CI rollback,
   debugger checkpoints, reset and a second Newport head use the same
   fail-closed transaction without refreshing stale CPU shadows. Device loss
-  is fatal on this path. It is not selectable in the emulator; other raw
-  consumers and live activation remain future work. Cached decoded DID
-  uploads still make direct scanout's small-state/GPU-DID milestone partial.
+  is fatal on this path. Checked aggregate telemetry now reports
+  primitive/mode/coverage and HostRW distributions, real nonempty batch sizes
+  and flush reasons, GFIFO occupancy/backpressure, attributed transfer bytes,
+  bounded-set waits and frame-cut/render latency. A 4 ms batch-age guard bounds
+  a continuously fed stream without splitting commands. Profiling is explicit
+  and maps only one 64-byte metadata record per real batch; the default path
+  remains map-free. A 66,741-record embedded-PROM command-monitor capture
+  replayed on Vulkan and D3D12 with zero read differences or unsupported
+  operations. Measurements retain 8 x 8 tiles, GPU-generated active-tile
+  dispatch, 1,024 state slots, three reusable sets and full selected-plane
+  HostR snapshots. It is not selectable in the emulator; production activation
+  and representative IRIX application performance remain future work. Cached
+  decoded DID uploads still make direct scanout's small-state/GPU-DID
+  milestone partial.
 - A strict synthetic REX3 replay corpus (`src/dev/ng1/testdata`) checks the
   interpreter, the Cranelift JIT and the GPU engine against one another; Linux
   CI runs its CPU half. See `TESTING.md`.
