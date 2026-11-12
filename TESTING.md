@@ -314,7 +314,11 @@ termination with stale-row preservation, zero scanline length, and width and
 height changes on both backends. A separate small-window case installs the
 real common wgpu renderer on the resident device, requires its surface
 present counter to advance, and still requires zero plane upload/readback,
-raw observation, or CPU-plane access.
+raw observation, or CPU-plane access. The explicitly selected compatibility
+case does the opposite by design: it requires one successful, attributed
+`Compatibility` observation of both complete planes (16 MiB), composes from a
+separate CPU cache, leaves the board shadows stale and protected, and matches
+the software oracle. It is not a fallback from direct presentation.
 
 ```sh
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag resident_ -- --test-threads=1
@@ -342,7 +346,7 @@ Remove-Item Env:\IRIS_NO_JIT -ErrorAction SilentlyContinue
 ```
 
 The script requires 25 `resident_` CPU tests, three flat-fill tests and two
-direct-state tests, then **10 resident GPU tests and seven direct
+direct-state tests, then **10 resident GPU tests and eight direct
 scanout tests on each backend**. It checks each libtest pass count, rejects
 hardware skips and prints the selected adapter; both Vulkan and D3D12 must
 succeed for the full gate. `.\scripts\test-resident-gate.ps1 -Backend vulkan`
