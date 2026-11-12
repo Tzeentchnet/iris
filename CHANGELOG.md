@@ -116,9 +116,12 @@ hashes are given where a change is easiest to understand by reading the commit.
   through explicit readback mode with either capture renderer. Direct mode
   remains standalone-only until iris-gui has a same-device eframe presenter.
   Embedded-PROM boots and captures, dual-head device sharing and the complete
-  130-case Vulkan+D3D12 gate pass. Representative
-  IRIX desktop/application performance remains unmeasured, so the mode is
-  still experimental.
+  130-case Vulkan+D3D12 gate pass. An installed IRIX 6.5 Indigo Magic desktop,
+  Showcase and Atlantis also render correctly on both direct backends.
+  Showcase canvas pixels match CPU raster exactly; in a 30-second Atlantis
+  sample, Vulkan and D3D12 improve live REX3 throughput by 42.1% and 24.3%
+  while using 5.9% and 7.7% less host CPU on the acceptance host. The mode
+  remains experimental while the application/adapter matrix is broadened.
 - A `rex-gpu` build renders Newport's flat fills on the host GPU when
   `IRIS_REX3_GPU=auto|vulkan|metal|dx12|gl` is set. It is experimental and off by
   default; without the variable a `rex-gpu` build renders as before, and

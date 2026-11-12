@@ -500,8 +500,33 @@ checks `rex status` for `no_cpu_fallback=true` and zero unsupported work.
 Vulkan additionally exercises a visible same-device wgpu window, explicit
 readback compatibility and a real RFB 3.8 loopback VNC framebuffer update.
 The direct VNC run must show composed direct bytes with zero compatibility raw
-bytes. These runs establish production lifecycle wiring, not representative
-IRIX desktop or application performance.
+bytes. These runs establish production lifecycle wiring independently of the
+representative application run below.
+
+The application-level acceptance run uses an installed IRIX 6.5 IP22 system
+with Xsgi, 4Dwm, toolchest, Showcase and the Atlantis demo. It boots the same
+disk through three isolated overlays: CPU raster, Vulkan resident direct and
+D3D12 resident direct. A scripted Showcase rectangle/ellipse workload must
+produce the same canvas pixels on all three paths. Save/restore and rollback
+must reproduce the complete pre-mutation resident screenshot exactly.
+Atlantis then runs for a 15-second warm-up and a 30-second measured interval.
+On the RTX 5070 / 16-logical-CPU acceptance host, the measured results were:
+
+| Engine | REX3 GO/s | Host core equivalents | Throughput vs CPU | Host CPU vs CPU |
+|---|---:|---:|---:|---:|
+| CPU raster/JIT | 4,761.5 | 1.673 | baseline | baseline |
+| Vulkan direct | 6,765.6 | 1.574 | +42.1% | -5.9% |
+| D3D12 direct | 5,918.0 | 1.545 | +24.3% | -7.7% |
+
+CPU throughput is the `rex status` `GO TOTAL` delta. Resident throughput is
+the telemetry accepted-command delta, and host core equivalents are process
+CPU seconds divided by wall seconds. Both resident samples require
+`unsupported=0`, `no_cpu_fallback=true`, no increase in raw/composed readback
+counters during the timed interval, and conservative p95 presentation buckets
+no higher than 4.2 ms. The accepted Showcase canvas crop SHA-256 was
+`b733d604c1a34554578e69fd9874d9ab892a470d54e67428d6a7fc081eec4190`
+on all three paths. Screenshots and snapshot plane observations occur outside
+the timing window and remain explicitly attributed.
 
 The M8 cases add checked histogram/delta accounting, exact GFIFO
 full-versus-contention telemetry, bounded-set wait accounting, a 4 ms

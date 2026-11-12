@@ -979,9 +979,13 @@ a same-device eframe wgpu presenter, so it cannot host Newport direct mode.
 `no_cpu_fallback=true`, aggregate command/batch/GFIFO/latency telemetry, and
 all attributed raw and composed transfer bytes. Snapshots, restore, CI
 rollback, reset, Stop/restart and dual-head construction retain GPU authority.
-The embedded PROM command monitor has booted and captured frames on Vulkan and
-D3D12 with zero unsupported operations, but representative IRIX desktop and
-application performance is not yet established.
+The embedded PROM command monitor and an installed IRIX 6.5 Indigo Magic
+desktop have booted and captured frames on Vulkan and D3D12 with zero
+unsupported operations. Showcase produced pixels identical to CPU raster on
+both backends, and the animated Atlantis demo improved live REX3 throughput by
+42.1% on Vulkan and 24.3% on D3D12 while using 5.9% and 7.7% less host CPU,
+respectively, on the acceptance host. The mode remains experimental and
+opt-in while that application/adapter matrix is broadened.
 
 ### REX3 live GPU renderer (legacy experiment, `--features rex-gpu`)
 

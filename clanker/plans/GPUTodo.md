@@ -1,14 +1,16 @@
 # REX3 proper GPU mode: implementation plan
 
-Status: in progress 2026-11-11. M0-M8 implementation and experimental
-production activation are complete for the standalone `iris` frontend.
+Status: complete 2026-11-12. M0-M10 implementation, experimental production
+activation and representative application acceptance are complete for the
+standalone `iris` frontend.
 `[graphics] raster = "wgpu"` now selects the GPU-authoritative Newport path,
 with direct same-device presentation by default and explicit readback
 compatibility when requested. The exact dual-backend gate and the production
-lifecycle matrix pass on Vulkan and D3D12. Representative IRIX desktop and
-application correctness/performance remain open, so normal-use acceptance is
-not complete. The tile-binned `IRIS_REX3_GPU` prototype remains separate and
-CPU-canonical.
+lifecycle matrix pass on Vulkan and D3D12. An installed IRIX 6.5 desktop,
+Showcase and the animated Atlantis demo also pass on CPU raster and both
+resident backends with matching pixels, zero unsupported work, no fallback,
+bounded presentation latency and better live command throughput. The
+tile-binned `IRIS_REX3_GPU` prototype remains separate and CPU-canonical.
 
 ## Goal
 
@@ -610,8 +612,8 @@ unsupported or CPU-fallback draws.
 Production activation is fail-closed: unsupported commands and device loss
 stop the machine rather than executing against CPU framebuffer shadows. The
 embedded-PROM workload reports zero unsupported commands on Vulkan and D3D12;
-representative IRIX application coverage remains the outstanding acceptance
-work.
+the installed IRIX 6.5 desktop, Showcase and Atlantis acceptance workloads
+also report zero unsupported commands on both backends.
 
 The first M3 infrastructure slice is complete in the gated test-only backend.
 Its Rust and WGSL sides share a fixed 64-byte `RexCommand` and 256-byte
@@ -968,11 +970,9 @@ three reusable sets and full selected-plane HostR snapshots.
 The exact 130-case Vulkan+D3D12 gate covers the scheduling change and includes
 an independent mixed workload with fills, copies, all line families, HostW,
 HostR, direct presentation and explicit observation. The M8 implementation
-checklist is complete within the gated backend. Its milestone acceptance for
-normal use remains open until the production path runs representative IRIX
-desktop applications and satisfies the end-to-end throughput, CPU-use and
-frame-rate criteria below; the embedded PROM capture does not claim that
-coverage.
+checklist is complete within the gated backend. The production path has now
+also passed the representative IRIX desktop/application and end-to-end
+throughput, CPU-use and presentation-latency acceptance described below.
 
 ### M9/M10 - Production activation and frontend
 
@@ -991,6 +991,8 @@ coverage.
 - [x] Expose explicit readback compatibility through both iris-gui capture
       renderers while keeping direct mode unavailable there.
 - [x] Validate production lifecycle on Vulkan and D3D12.
+- [x] Validate an installed IRIX desktop and representative applications on
+      CPU raster, Vulkan direct and D3D12 direct.
 
 Production configuration uses `[graphics] raster = "wgpu"` in a build with
 the `wgpu` feature. `newport_mode = "direct"` is the default.
@@ -1017,9 +1019,32 @@ initializes the context in place and has a default-service-thread regression.
 The exact 130-case Vulkan+D3D12 gate and all four supported feature checks pass
 after activation.
 
-This completes production wiring, not normal-use acceptance. Representative
-IRIX desktop and graphics applications still need correctness, frame-rate,
-latency and host-CPU measurements.
+Application acceptance used a clean IRIX 6.5 IP22 install with the 24-bit Indy
+graphics personality, Xsgi, 4Dwm and toolchest. The same scripted Showcase
+rectangle/ellipse workload produced an identical 450 x 450 RGB crop on CPU
+raster, Vulkan direct and D3D12 direct:
+`b733d604c1a34554578e69fd9874d9ab892a470d54e67428d6a7fc081eec4190`.
+Full-screen save/restore captures were byte-identical on each resident
+backend, and CI rollback reproduced the same saved frame.
+
+The animated Atlantis demo then exercised 12-bit RGB spans, shading, Z,
+dithering, clipping and double-source draws for a 30-second sample after a
+15-second warm-up on an RTX 5070 host with 16 logical CPUs:
+
+| Engine | REX3 GO/s | Host core equivalents | Throughput vs CPU | Host CPU vs CPU | Resident p95 presentation |
+|---|---:|---:|---:|---:|---:|
+| CPU raster/JIT | 4,761.5 | 1.673 | baseline | baseline | n/a |
+| Vulkan direct | 6,765.6 | 1.574 | +42.1% | -5.9% | <= 4.2 ms |
+| D3D12 direct | 5,918.0 | 1.545 | +24.3% | -7.7% | <= 1.1 ms |
+
+CPU throughput is the `GO TOTAL` delta; resident throughput is the accepted
+command delta. Host core equivalents are process CPU seconds divided by wall
+seconds. During both resident samples `unsupported=0`,
+`no_cpu_fallback=true`, and all raw/composed readback counters remained
+unchanged. Screenshots and snapshots were taken outside the timed interval and
+remained explicitly attributed. This completes the normal-use acceptance gate
+for the supported workload set; the mode remains experimental pending review
+and broader deployment rather than an unfinished roadmap item.
 
 ## Validation requirements
 
@@ -1075,14 +1100,14 @@ criteria:
 Do not require high GPU utilization. A lightly used GPU at base clock is an
 expected result when the emulated guest CPU is the producer bottleneck.
 
-## Open implementation questions
+## Follow-on questions
 
-The implementation questions settled by M0-M10 are recorded above. Remaining
-work needs application evidence or frontend design:
+The implementation and acceptance questions settled by M0-M10 are recorded
+above. Remaining work is optional frontend or platform expansion:
 
 - how `iris-gui` selects or hosts a same-device eframe wgpu renderer;
-- which representative IRIX desktop and graphics workloads define the
-  application-level acceptance set and tolerances;
+- how broadly to expand the IRIX application and host-adapter matrix before a
+  default change;
 - whether Metal can satisfy the same completion, destruction and lifecycle
   gate before it is allowed; and
 - whether measurements justify enabling the experimental path by default in a
@@ -1110,6 +1135,8 @@ REX3 GPU mode is ready to consider for normal use only when:
 8. user documentation states the available raster/compositor combinations,
    fallback behavior and explicit readback costs.
 
-As of 2026-11-11, production wiring and evidence satisfy items 1-6 and 8 for
-the exercised command set. Item 7 remains open, so the mode stays experimental
-and is not yet ready to become a normal-use default.
+As of 2026-11-12, production wiring and evidence satisfy items 1-8 for the
+exercised command and application set. The implementation plan is complete.
+The mode stays experimental and opt-in while the stack is reviewed and tested
+on a broader application/adapter matrix; becoming the default is a separate
+release decision.
