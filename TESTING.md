@@ -346,11 +346,17 @@ destination factors with both `BLENDALPHA` behaviors, then covers
 `BACKBLEND`, 4/8/12-bit expansion and recompression, dithering, `DBLSRC`,
 OLAY/PUP/CID packing and a YFLIP line. Both complete planes and final context
 state are compared with the CPU oracle.
+The hardware pattern case covers transparent and opaque Z and line patterns,
+combined tests, `LSREPEAT`/`LSLENGTH`, `LSADVLAST`, row reset with a continuing
+repeat counter, clipped phase, reverse blocks, YFLIP, fractional and
+antialiased lines, and `COLORBACK` through the ordinary pixel pipeline. It
+compares both complete planes and final pattern context on both backends.
 
 ```sh
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag resident_ -- --test-threads=1
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag dev::ng1::rex3_flat_fill::tests -- --test-threads=1
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag dev::ng1::wgpu::line::tests -- --test-threads=1
+cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag line_pattern_closed_form_matches_scalar_advancement -- --test-threads=1
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag dev::ng1::wgpu::command::tests -- --test-threads=1
 cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag direct_ng1_scanout_ -- --test-threads=1
 REX3_RESIDENT_BACKEND=vulkan cargo test --locked -p iris --lib --features wgpu,rex-jit,rexdiag resident_gpu_ -- --ignored --nocapture --test-threads=1
@@ -375,7 +381,8 @@ Remove-Item Env:\IRIS_NO_JIT -ErrorAction SilentlyContinue
 ```
 
 The script requires 25 `resident_` CPU tests, four flat-fill tests, two line
-tests, three command-ABI tests and two direct-state tests, then **14 resident GPU tests and eight direct
+tests, one pattern-state test, three command-ABI tests and two direct-state
+tests, then **15 resident GPU tests and eight direct
 scanout tests on each backend**. It checks each libtest pass count, rejects
 hardware skips and prints the selected adapter; both Vulkan and D3D12 must
 succeed for the full gate. `.\scripts\test-resident-gate.ps1 -Backend vulkan`

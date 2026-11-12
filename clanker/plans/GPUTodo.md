@@ -573,8 +573,9 @@ deliberately slow and never an automatic fallback. M2 is complete within this
 gated test-only scope. Live activation remains gated on M3 opcode coverage,
 and `iris-gui` cannot select this mode.
 
-The Windows gate `.\scripts\test-resident-gate.ps1` checks 80 cases: 25
-resident CPU, 4 flat-fill, 2 line, 3 command-ABI and 2 direct-state tests, plus 14
+The Windows gate `.\scripts\test-resident-gate.ps1` checks 83 cases: 25
+resident CPU, 4 flat-fill, 2 line, 1 pattern-state, 3 command-ABI and 2
+direct-state tests, plus 15
 resident GPU and 8
 direct-scanout tests on each of Vulkan and D3D12. It requires the named
 backend on an integrated/discrete adapter and fails rather than skipping
@@ -588,8 +589,8 @@ when unavailable; a single-backend run is not the complete gate. See
 - [x] Preserve ordered per-tile command lists.
 - [x] Implement blocks, spans and clears.
 - [x] Implement integer, fractional and antialiased lines.
-- [ ] Implement RGB, auxiliary/CID/overlay and Z effects.
-- [ ] Implement clipping, stipples, masks, logic operations, blending and
+- [x] Implement RGB, auxiliary/CID/overlay and Z effects.
+- [x] Implement clipping, stipples, masks, logic operations, blending and
       dithering.
 - [ ] Implement screen-to-screen copies and overlap hazards.
 - [ ] Implement continuation and empty/no-op context behavior.
@@ -613,7 +614,7 @@ directions, spans retain the hardware's left-to-right walk, and active fast
 clears use the canonical REX3 mode fold and replicated `COLORVRAM` value
 rather than COLORI or a destination read. WRMASK and RGB/auxiliary plane
 selection remain exact. Clipping, stipples, continuation and the general
-pixel-operation pipeline remain later M3 slices.
+pixel-operation pipeline were left to later M3 slices.
 
 The line slice adds distinct integer, fractional and antialiased command
 kinds. It consumes the post-setup Bresenham state, records one bounded payload
@@ -622,7 +623,7 @@ without rerunning setup or walking a full bounding box. All octants,
 BRESROUND ties, fractional endpoints, skip-first/last, AWEIGHT endpoint
 filtering, RGB/auxiliary writes and exact `XSTART`/`YSTART`/`BRESD` completion
 match the CPU oracle on Vulkan and D3D12. Length-32/single-step continuation,
-stipples and the general pixel-operation pipeline remain later M3 slices.
+stipples and the general pixel-operation pipeline were left to later M3 slices.
 
 The destination-clipping slice adds `XYOFFSET`/`XYMOVE`, window-relative
 SMASK0, OR-combined absolute SMASK1-4 and CIDMATCH to both fills and lines.
@@ -647,8 +648,19 @@ WRMASK stages; logic operations are bypassed while blending is active.
 Destination hazard flags are omitted only for `BACKBLEND`, which reads
 `COLORBACK` instead of the resident plane. A complete 6x6 factor matrix plus
 lower-depth, auxiliary, background, dithered and line cases matches the CPU
-oracle on both hardware backends. Z, stipple and shade behavior remain
-separate M3 work.
+oracle on both hardware backends.
+
+The pattern slice implements transparent and opaque `ZPATTERN` and
+`LSPATTERN` tests for fills and lines. Fill lanes derive phase from the
+unclipped walker coordinates, reset pattern bits at row boundaries and carry
+the line-repeat counter across rows. Line payload words encode transparent
+suppression or `COLORBACK` selection while preserving O(1) lane coverage.
+`LSREPEAT`, `LSLENGTH`, `LSADVLAST`, initial pattern phase and final
+`PAT_BIT`/`ZPAT_BIT`/`LSRCOUNT` all match the CPU model. Opaque background
+pixels enter the same alpha/logic/blend/dither pipeline as ordinary pixels.
+Complete-plane coverage includes clipped, reverse, YFLIP, fractional and
+antialiased cases on both hardware backends. Shade DDA remains separate M3
+work.
 
 ### M4 - HostW staging
 
