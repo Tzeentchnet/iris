@@ -173,7 +173,7 @@ pub struct Machine {
     lifecycle: GuestState,
 }
 
-#[cfg(all(test, feature = "wgpu"))]
+#[cfg(feature = "wgpu")]
 type ResidentCheckpoint = (toml::Value, (Vec<u32>, Vec<u32>));
 
 /// In-memory snapshot of the just-restored guest state. Populated at the end
@@ -196,7 +196,7 @@ struct RollbackCheckpoint {
 
     /// Framebuffer contents (RGB, aux). `None` when running headless.
     framebuffers: Option<(Vec<u32>, Vec<u32>)>,
-    #[cfg(all(test, feature = "wgpu"))]
+    #[cfg(feature = "wgpu")]
     resident_head1_framebuffers: Option<(Vec<u32>, Vec<u32>)>,
 
     /// Parsed device save_state TOMLs. Holding `toml::Value` directly skips
@@ -274,7 +274,7 @@ pub(crate) fn parse_cow_table(cow_toml: &toml::Value) -> Vec<(usize, Vec<u64>)> 
 pub(crate) struct LiveCheckpoint {
     bank_words: [Vec<u32>; 4],
     framebuffers: Option<(Vec<u32>, Vec<u32>)>,
-    #[cfg(all(test, feature = "wgpu"))]
+    #[cfg(feature = "wgpu")]
     resident_head1_framebuffers: Option<(Vec<u32>, Vec<u32>)>,
     cpu: toml::Value,
     mc: toml::Value,
@@ -320,13 +320,17 @@ fn check_virtio_slot_free(slot: crate::dev::ioc::GioSlot, ultra64: bool, testdev
 
 impl Machine {
     pub fn new(cfg: MachineConfig) -> Self {
+        Self::try_new(cfg).unwrap_or_else(|error| panic!("machine construction failed: {error}"))
+    }
+
+    pub(crate) fn try_new(cfg: MachineConfig) -> Result<Self, String> {
         // Host calls (iris-hostcall): the self-test service is always there
         // when the feature is built in, so a guest can prove the trap works.
         #[cfg(feature = "hostcall")]
         iris_hostcall::register(iris_hostcall::SELFTEST, Box::new(iris_hostcall::SelfTest));
         #[cfg(feature = "hostgl")]
         iris_hostgl::register();
-        Self::new_with_testdev(cfg, None)
+        Self::try_new_with_testdev(cfg, None)
     }
 
     /// `new`, with the bare-metal test device supplied by the caller rather
@@ -337,9 +341,18 @@ impl Machine {
     /// console and exit code delivered in-process instead of to stdout and
     /// `process::exit` (`crate::bench_runner`, `TestDevice::new_embedded`).
     pub fn new_with_testdev(
-        mut cfg: MachineConfig,
+        cfg: MachineConfig,
         testdev_override: Option<Arc<crate::dev::testdev::TestDevice>>,
     ) -> Self {
+        Self::try_new_with_testdev(cfg, testdev_override)
+            .unwrap_or_else(|error| panic!("machine construction failed: {error}"))
+    }
+
+    fn try_new_with_testdev(
+        mut cfg: MachineConfig,
+        testdev_override: Option<Arc<crate::dev::testdev::TestDevice>>,
+    ) -> Result<Self, String> {
+        cfg.validate_newport_raster_gate()?;
         // The rig takes any part: `MachineConfig::cpu_part` looks at this.
         cfg.test_device |= testdev_override.is_some();
         // Capture config flags that are needed after the local `cfg` binding
@@ -542,11 +555,59 @@ impl Machine {
             .collect();
         let nvram_provenance = cfg.nvram.clone();
 
+        #[cfg(feature = "wgpu")]
+        let resident_gpu = if newport_active
+            && cfg.graphics.raster == crate::config::RasterUnit::Wgpu
+        {
+            if std::env::var_os("IRIS_REX3_GPU").is_some() {
+                return Err(
+                    "IRIS_REX3_GPU and production Newport graphics.raster = \"wgpu\" are mutually exclusive"
+                        .into(),
+                );
+            }
+            let options = crate::wgpu::GpuOptions {
+                backend: cfg.graphics.gpu_backend.clone(),
+                ..Default::default()
+            };
+            let gpu = crate::wgpu::Gpu::new(&options)
+                .map_err(|error| format!("create Newport resident GPU: {error}"))?;
+            if !matches!(gpu.caps.backend, wgpu::Backend::Vulkan | wgpu::Backend::Dx12) {
+                return Err(format!(
+                    "Newport resident GPU resolved graphics.gpu_backend = {:?} to unsupported {:?}; \
+                     use Vulkan or D3D12",
+                    cfg.graphics.gpu_backend, gpu.caps.backend
+                ));
+            }
+            gpu.check().map_err(|error| format!("initialize Newport resident GPU: {error}"))?;
+            eprintln!("iris: Newport resident GPU enabled without CPU fallback: {}", gpu.caps);
+            Some(gpu)
+        } else {
+            None
+        };
+
+        #[cfg(feature = "wgpu")]
+        let resident_mode = match cfg.graphics.newport_wgpu_mode() {
+            crate::config::NewportWgpuMode::Direct =>
+                crate::dev::ng1::rex3::ResidentDisplayMode::DirectWgpu,
+            crate::config::NewportWgpuMode::Readback =>
+                crate::dev::ng1::rex3::ResidentDisplayMode::ReadbackCompatibility,
+        };
+
         // REX3 Graphics — Newport only; skipped in headless mode or when non-Newport board selected.
         let rex3: Option<Arc<Rex3>> = if cfg.headless || cfg.graphics_board() != crate::config::GraphicsBoard::Newport {
             None
         } else {
-            let r = Arc::new(Rex3::new(status.clone()));
+            let r = Rex3::new(status.clone());
+            #[cfg(feature = "wgpu")]
+            let r = {
+                let mut r = r;
+                if let Some(gpu) = &resident_gpu {
+                    r.activate_resident_gpu_for_runtime(Arc::clone(gpu), resident_mode)
+                        .map_err(|error| format!("activate primary Newport resident GPU: {error}"))?;
+                }
+                r
+            };
+            let r = Arc::new(r);
             r.set_fatal_sender(fatal_tx.clone());
             let wiring = GIO_SLOT_MAP[profile_idx(guinness)][GioSlot::Gfx as usize];
             r.set_vblank_irq(ioc.irq_line(wiring.retrace));
@@ -557,7 +618,17 @@ impl Machine {
         let rex3_head1: Option<Arc<Rex3>> = if cfg.headless || cfg.graphics.heads < 2 {
             None
         } else {
-            let r = Arc::new(Rex3::new(status.clone()));
+            let r = Rex3::new(status.clone());
+            #[cfg(feature = "wgpu")]
+            let r = {
+                let mut r = r;
+                if let Some(gpu) = &resident_gpu {
+                    r.activate_resident_gpu_for_runtime(Arc::clone(gpu), resident_mode)
+                        .map_err(|error| format!("activate secondary Newport resident GPU: {error}"))?;
+                }
+                r
+            };
+            let r = Arc::new(r);
             r.set_fatal_sender(fatal_tx.clone());
             let wiring = GIO_SLOT_MAP[profile_idx(guinness)][GioSlot::Exp0 as usize];
             r.set_vblank_irq(ioc.irq_line(wiring.retrace));
@@ -961,7 +1032,7 @@ impl Machine {
 
         crate::thread_affinity::init(perf);
 
-        Self {
+        Ok(Self {
             memory,            cpu,
             board,
             mc,
@@ -986,7 +1057,7 @@ impl Machine {
             controller_slot: None,
             controller_registered: false,
             lifecycle: GuestState::Idle,
-        }
+        })
     }
 
     fn apply_host_display_resolution(&self) {
@@ -1006,7 +1077,7 @@ impl Machine {
             self.display_resolution
         };
         let apply = |rex3: &Rex3| {
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             if rex3.resident_active() {
                 rex3.apply_resident_display_resolution(mode, true)
                     .unwrap_or_else(|error| panic!("REX3 {error}"));
@@ -1469,14 +1540,14 @@ impl Machine {
         result
     }
 
-    #[cfg(all(test, feature = "wgpu"))]
+    #[cfg(feature = "wgpu")]
     fn capture_resident_checkpoint(rex: Option<&Rex3>) -> Result<Option<ResidentCheckpoint>, String> {
         rex.filter(|rex| rex.resident_active())
             .map(|rex| rex.snapshot_resident_checkpoint().map_err(|error| error.to_string()))
             .transpose()
     }
 
-    #[cfg(all(test, feature = "wgpu"))]
+    #[cfg(feature = "wgpu")]
     fn validate_resident_primary_checkpoint(&self, registers: bool, planes: bool) -> Result<(), String> {
         if self.board.rex3.as_ref().is_some_and(|rex| rex.resident_active()) && (!registers || !planes) {
             return Err("resident REX3 checkpoint requires registers and both planes".into());
@@ -1484,7 +1555,7 @@ impl Machine {
         Ok(())
     }
 
-    #[cfg(all(test, feature = "wgpu"))]
+    #[cfg(feature = "wgpu")]
     fn validate_resident_head1_checkpoint(&self, registers: bool, planes: bool) -> Result<(), String> {
         if self.board.rex3_head1.as_ref().is_some_and(|rex| rex.resident_active()) && (!registers || !planes) {
             return Err("resident REX3 head 1 checkpoint requires registers and both planes".into());
@@ -1492,7 +1563,7 @@ impl Machine {
         Ok(())
     }
 
-    #[cfg(all(test, feature = "wgpu"))]
+    #[cfg(feature = "wgpu")]
     fn restore_resident_head1_framebuffers(
         &self,
         has_registers: bool,
@@ -1503,7 +1574,8 @@ impl Machine {
                 return Err("resident REX3 head 1 checkpoint has no registers".into());
             }
             let (rgb, aux) = planes.ok_or("resident REX3 head 1 checkpoint has no planes")?;
-            rex.restore_framebuffers_inmem(rgb, aux);
+            rex.try_restore_framebuffers_inmem(rgb, aux)
+                .map_err(|error| format!("restore resident REX3 head 1 framebuffers: {error}"))?;
         }
         Ok(())
     }
@@ -1512,9 +1584,9 @@ impl Machine {
     fn capture_rollback_checkpoint(&mut self, name: &str) -> Result<RollbackCheckpoint, String> {
         self.stop();
 
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let resident_primary = Self::capture_resident_checkpoint(self.board.rex3.as_deref())?;
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let resident_head1 = Self::capture_resident_checkpoint(self.board.rex3_head1.as_deref())?;
         let cpu = self.cpu.save_state();
         let mc = self.mc.save_state();
@@ -1529,12 +1601,12 @@ impl Machine {
         let seeq = self.hpc3.seeq().save_state();
         let hpc3 = self.hpc3.save_state();
         let rex3 = self.board.rex3.as_ref().map(|r| {
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             if let Some((state, _)) = &resident_primary { return state.clone(); }
             r.save_state()
         });
         let rex3_head1 = self.board.rex3_head1.as_ref().map(|r| {
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             if let Some((state, _)) = &resident_head1 { return state.clone(); }
             r.save_state()
         });
@@ -1546,14 +1618,14 @@ impl Machine {
             self.board.phys.snapshot_bank_inmem(3),
         ];
 
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let framebuffers = match resident_primary {
             Some((_, planes)) => Some(planes),
             None => self.board.rex3.as_ref().map(|r| r.snapshot_framebuffers_inmem()),
         };
-        #[cfg(not(all(test, feature = "wgpu")))]
+        #[cfg(not(feature = "wgpu"))]
         let framebuffers = self.board.rex3.as_ref().map(|r| r.snapshot_framebuffers_inmem());
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let resident_head1_framebuffers = resident_head1.map(|(_, planes)| planes);
 
         // Re-read cow.toml (and cow1.toml, for controller 1) so rollback
@@ -1574,7 +1646,7 @@ impl Machine {
             overlay_sets1,
             bank_words,
             framebuffers,
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             resident_head1_framebuffers,
             cpu, mc, ioc, scc, pit, ps2, rtc, eeprom, scsi, scsi1, seeq, hpc3, rex3, rex3_head1,
         })
@@ -1584,9 +1656,9 @@ impl Machine {
     /// the moment of capture. Skips disk IO and TOML string-parsing.
     fn apply_rollback_checkpoint(&mut self, cp: &RollbackCheckpoint) -> Result<(), String> {
         self.stop();
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         self.validate_resident_primary_checkpoint(cp.rex3.is_some(), cp.framebuffers.is_some())?;
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         self.validate_resident_head1_checkpoint(cp.rex3_head1.is_some(), cp.resident_head1_framebuffers.is_some())?;
         self.power_on_devices();
 
@@ -1615,9 +1687,10 @@ impl Machine {
             self.board.phys.restore_bank_inmem(i, words);
         }
         if let (Some(rex3), Some((rgb, aux))) = (&self.board.rex3, &cp.framebuffers) {
-            rex3.restore_framebuffers_inmem(rgb, aux);
+            rex3.try_restore_framebuffers_inmem(rgb, aux)
+                .map_err(|error| format!("restore REX3 framebuffers: {error}"))?;
         }
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         self.restore_resident_head1_framebuffers(cp.rex3_head1.is_some(), cp.resident_head1_framebuffers.as_ref())?;
 
         // Reflink the overlay back into place. saves/<name>/scsi*.overlay is
@@ -1650,10 +1723,10 @@ impl Machine {
     pub(crate) fn capture_live_checkpoint(&mut self) -> LiveCheckpoint {
         self.stop();
 
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let resident_primary = Self::capture_resident_checkpoint(self.board.rex3.as_deref())
             .unwrap_or_else(|error| panic!("REX3 {error}"));
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let resident_head1 = Self::capture_resident_checkpoint(self.board.rex3_head1.as_deref())
             .unwrap_or_else(|error| panic!("REX3 {error}"));
         let cpu = self.cpu.save_state();
@@ -1667,12 +1740,12 @@ impl Machine {
         let seeq = self.hpc3.seeq().save_state();
         let hpc3 = self.hpc3.save_state();
         let rex3 = self.board.rex3.as_ref().map(|r| {
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             if let Some((state, _)) = &resident_primary { return state.clone(); }
             r.save_state()
         });
         let rex3_head1 = self.board.rex3_head1.as_ref().map(|r| {
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             if let Some((state, _)) = &resident_head1 { return state.clone(); }
             r.save_state()
         });
@@ -1684,14 +1757,14 @@ impl Machine {
             self.board.phys.snapshot_bank_inmem(3),
         ];
 
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let framebuffers = match resident_primary {
             Some((_, planes)) => Some(planes),
             None => self.board.rex3.as_ref().map(|r| r.snapshot_framebuffers_inmem()),
         };
-        #[cfg(not(all(test, feature = "wgpu")))]
+        #[cfg(not(feature = "wgpu"))]
         let framebuffers = self.board.rex3.as_ref().map(|r| r.snapshot_framebuffers_inmem());
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let resident_head1_framebuffers = resident_head1.map(|(_, planes)| planes);
 
         // Deliberately NOT restart_peripherals()/cpu.start() here — see this
@@ -1700,7 +1773,7 @@ impl Machine {
         LiveCheckpoint {
             bank_words,
             framebuffers,
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             resident_head1_framebuffers,
             cpu, mc, ioc, scc, pit, ps2, rtc, eeprom, seeq, hpc3, rex3, rex3_head1,
         }
@@ -1721,9 +1794,9 @@ impl Machine {
     /// stayed unresponsive after every `jitcheck` for no reason).
     pub(crate) fn restore_live_checkpoint(&mut self, cp: &LiveCheckpoint) -> Result<(), String> {
         self.stop();
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         self.validate_resident_primary_checkpoint(cp.rex3.is_some(), cp.framebuffers.is_some())?;
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         self.validate_resident_head1_checkpoint(cp.rex3_head1.is_some(), cp.resident_head1_framebuffers.is_some())?;
 
         self.cpu.load_state(&cp.cpu)?;
@@ -1747,9 +1820,10 @@ impl Machine {
             self.board.phys.restore_bank_inmem(i, words);
         }
         if let (Some(rex3), Some((rgb, aux))) = (&self.board.rex3, &cp.framebuffers) {
-            rex3.restore_framebuffers_inmem(rgb, aux);
+            rex3.try_restore_framebuffers_inmem(rgb, aux)
+                .map_err(|error| format!("restore REX3 framebuffers: {error}"))?;
         }
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         self.restore_resident_head1_framebuffers(cp.rex3_head1.is_some(), cp.resident_head1_framebuffers.as_ref())?;
 
         // Peripherals back up; CPU deliberately left stopped — see this
@@ -1827,16 +1901,16 @@ impl Machine {
     pub fn save_snapshot(&mut self, name: &str) -> Result<(), String> {
         self.stop();
 
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let mut resident_primary = Self::capture_resident_checkpoint(self.board.rex3.as_deref())?;
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let resident_head1 = Self::capture_resident_checkpoint(self.board.rex3_head1.as_deref())?;
         let dir = std::path::PathBuf::from("saves").join(name);
         let snap = Snapshot::new(&dir);
         snap.ensure_dir().map_err(|e| e.to_string())?;
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let incomplete = dir.join("resident_snapshot_incomplete");
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         let remove_incomplete = {
             let resident = resident_primary.is_some() || resident_head1.is_some();
             if resident {
@@ -1883,23 +1957,23 @@ impl Machine {
         // included in the chunks manifest below for v3+; v2 wrote them as
         // standalone .bin files.
         if let Some(rex3) = &self.board.rex3 {
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             let resident_state = resident_primary.as_ref().map(|(state, _)| state);
-            #[cfg(not(all(test, feature = "wgpu")))]
+            #[cfg(not(feature = "wgpu"))]
             let resident_state: Option<&toml::Value> = None;
             match resident_state {
                 Some(state) => snap.write_state("rex3", state, sv),
                 None => snap.write_state("rex3", &rex3.save_state(), sv),
             }.map_err(|e| e.to_string())?;
             if sv < 3 {
-                #[cfg(all(test, feature = "wgpu"))]
+                #[cfg(feature = "wgpu")]
                 if let Some((_, (rgb, aux))) = &resident_primary {
                     Rex3::write_captured_resident_framebuffers(&snap.dir, "rex3", rgb, aux)
                         .map_err(|e| e.to_string())?;
                 } else {
                     rex3.save_framebuffers(&snap.dir).map_err(|e| e.to_string())?;
                 }
-                #[cfg(not(all(test, feature = "wgpu")))]
+                #[cfg(not(feature = "wgpu"))]
                 rex3.save_framebuffers(&snap.dir).map_err(|e| e.to_string())?;
             }
         }
@@ -1907,32 +1981,27 @@ impl Machine {
             snap.write_state("testdev", &td.save_state(), sv).map_err(|e| e.to_string())?;
         }
         if let Some(rex3) = &self.board.rex3_head1 {
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             let resident_state = resident_head1.as_ref().map(|(state, _)| state);
-            #[cfg(not(all(test, feature = "wgpu")))]
+            #[cfg(not(feature = "wgpu"))]
             let resident_state: Option<&toml::Value> = None;
             match resident_state {
                 Some(state) => snap.write_state("rex3_head1", state, sv),
                 None => snap.write_state("rex3_head1", &rex3.save_state(), sv),
             }.map_err(|e| e.to_string())?;
             // The v3 chunk manifest covers only the primary head. Keep the
-            // gated second head in the existing named-plane format.
-            #[cfg(all(test, feature = "wgpu"))]
-            let save_planes = sv < 3 || rex3.resident_active();
-            #[cfg(not(all(test, feature = "wgpu")))]
-            let save_planes = sv < 3;
-            if save_planes {
-                let dir = &snap.dir;
-                #[cfg(all(test, feature = "wgpu"))]
-                if let Some((_, (rgb, aux))) = &resident_head1 {
-                    Rex3::write_captured_resident_framebuffers(dir, "rex3_head1", rgb, aux)
-                        .map_err(|e| e.to_string())?;
-                } else {
-                    rex3.save_framebuffers_named(dir, "rex3_head1").map_err(|e| e.to_string())?;
-                }
-                #[cfg(not(all(test, feature = "wgpu")))]
+            // second head in the existing named-plane format in every raster
+            // mode so overwriting a snapshot cannot retain stale resident planes.
+            let dir = &snap.dir;
+            #[cfg(feature = "wgpu")]
+            if let Some((_, (rgb, aux))) = &resident_head1 {
+                Rex3::write_captured_resident_framebuffers(dir, "rex3_head1", rgb, aux)
+                    .map_err(|e| e.to_string())?;
+            } else {
                 rex3.save_framebuffers_named(dir, "rex3_head1").map_err(|e| e.to_string())?;
             }
+            #[cfg(not(feature = "wgpu"))]
+            rex3.save_framebuffers_named(dir, "rex3_head1").map_err(|e| e.to_string())?;
         }
         if let Some(gr2) = &self.board.gr2 {
             snap.write_state("gr2", &gr2.save_state(), sv).map_err(|e| e.to_string())?;
@@ -1954,9 +2023,9 @@ impl Machine {
                     .map_err(|e| format!("CAS bank{} put: {}", i, e))?;
             }
             if let Some(rex3) = &self.board.rex3 {
-                #[cfg(all(test, feature = "wgpu"))]
+                #[cfg(feature = "wgpu")]
                 let planes = resident_primary.take().map(|(_, planes)| planes);
-                #[cfg(not(all(test, feature = "wgpu")))]
+                #[cfg(not(feature = "wgpu"))]
                 let planes: Option<(Vec<u32>, Vec<u32>)> = None;
                 let (rgb, aux) = planes.unwrap_or_else(|| rex3.snapshot_framebuffers_inmem());
                 let rgb_chunks = put_words_as_chunks(&store, &rgb)
@@ -1990,7 +2059,7 @@ impl Machine {
                 .map_err(|e| e.to_string())?;
         }
 
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         if remove_incomplete {
             for rex3 in [self.board.rex3.as_ref(), self.board.rex3_head1.as_ref()].into_iter().flatten() {
                 if rex3.resident_active() {
@@ -2045,7 +2114,7 @@ impl Machine {
         self.stop();
 
         let dir = std::path::PathBuf::from("saves").join(name);
-        #[cfg(all(test, feature = "wgpu"))]
+        #[cfg(feature = "wgpu")]
         if dir.join("resident_snapshot_incomplete").try_exists().map_err(|e| e.to_string())? {
             return Err("resident machine snapshot is incomplete".into());
         }
@@ -2217,7 +2286,7 @@ impl Machine {
         }
         if let Some(rex3) = &self.board.rex3_head1 {
             let head1_state = snap.read_state("rex3_head1", schema_version);
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             if rex3.resident_active() {
                 if let Err(error) = &head1_state {
                     return Err(format!("resident REX3 head 1 state: {error}"));
@@ -2225,10 +2294,14 @@ impl Machine {
             }
             if let Ok(rex3_v) = head1_state {
                 rex3.load_state(&rex3_v)?;
-                #[cfg(all(test, feature = "wgpu"))]
-                let load_planes = schema_version < 3 || rex3.resident_active();
-                #[cfg(not(all(test, feature = "wgpu")))]
-                let load_planes = schema_version < 3;
+                let rgb_path = snap.dir.join("rex3_head1_rgb.bin");
+                let aux_path = snap.dir.join("rex3_head1_aux.bin");
+                let named_planes_present = rgb_path.try_exists().map_err(|e| e.to_string())?
+                    || aux_path.try_exists().map_err(|e| e.to_string())?;
+                #[cfg(feature = "wgpu")]
+                let load_planes = schema_version < 3 || rex3.resident_active() || named_planes_present;
+                #[cfg(not(feature = "wgpu"))]
+                let load_planes = schema_version < 3 || named_planes_present;
                 if load_planes {
                     rex3.load_framebuffers_named(&snap.dir, "rex3_head1").map_err(|e| e.to_string())?;
                 }
@@ -2251,7 +2324,7 @@ impl Machine {
             let store = ChunkStore::new("saves");
             let chunks = snap.read_chunks_manifest()
                 .map_err(|e| format!("read chunks.bin: {}", e))?;
-            #[cfg(all(test, feature = "wgpu"))]
+            #[cfg(feature = "wgpu")]
             self.validate_resident_primary_checkpoint(true, chunks.framebuffer_chunks.is_some())?;
             for (i, hashes) in chunks.bank_chunks.iter().enumerate() {
                 if hashes.is_empty() { continue; }
@@ -2264,7 +2337,8 @@ impl Machine {
                     .map_err(|e| format!("CAS rex3 rgb get: {}", e))?;
                 let aux = get_chunks_as_words(&store, aux_h)
                     .map_err(|e| format!("CAS rex3 aux get: {}", e))?;
-                rex3.restore_framebuffers_inmem(&rgb, &aux);
+                rex3.try_restore_framebuffers_inmem(&rgb, &aux)
+                    .map_err(|error| format!("restore REX3 framebuffer chunks: {error}"))?;
             }
         } else {
             for i in 0..4 {
@@ -2652,6 +2726,83 @@ mod controller_lifetime_tests {
             let err = ctrl.execute_command(cmd, args, Box::new(std::io::sink())).unwrap_err();
             assert_eq!(err, "machine is not running", "{cmd}");
         }
+    }
+}
+
+#[cfg(all(test, feature = "wgpu"))]
+mod production_newport_wgpu_tests {
+    use super::*;
+    use crate::config::NewportWgpuMode;
+    use crate::gfx_display::GfxDisplay;
+    use crate::test_temp::{nvram_in, TempPath};
+
+    fn production_config(nv_dir: &std::path::Path) -> MachineConfig {
+        let mut cfg = MachineConfig::default();
+        nvram_in(&mut cfg, nv_dir);
+        cfg.scsi.clear();
+        cfg.no_audio = true;
+        cfg.ci = true;
+        cfg.monitor_port = Some(0);
+        cfg.graphics.raster = crate::config::RasterUnit::Wgpu;
+        cfg.graphics.gpu_backend = std::env::var("REX3_RESIDENT_BACKEND")
+            .unwrap_or_else(|_| "vulkan".into());
+        cfg
+    }
+
+    #[test]
+    #[ignore = "requires a validated Vulkan or D3D12 adapter"]
+    fn production_dual_head_wgpu_shares_device_and_restarts_idempotently() {
+        let nv = TempPath::dir("newport-production-nv");
+        let nv_dir = nv.to_path_buf();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                let mut cfg = production_config(&nv_dir);
+                cfg.graphics.heads = 2;
+
+                let mut machine = Machine::try_new(cfg).expect("construct production resident machine");
+                let primary = machine.get_rex3().expect("primary Newport");
+                let secondary = machine.get_rex3_head1().expect("secondary Newport");
+                let primary_gpu = GfxDisplay::gpu(&*primary).expect("primary resident GPU");
+                let secondary_gpu = GfxDisplay::gpu(&*secondary).expect("secondary resident GPU");
+                assert!(Arc::ptr_eq(&primary_gpu, &secondary_gpu));
+                assert!(GfxDisplay::requires_same_device_wgpu_presenter(&*primary));
+                assert!(GfxDisplay::requires_same_device_wgpu_presenter(&*secondary));
+
+                machine.start();
+                machine.restart_peripherals();
+                for rex in [&primary, &secondary] {
+                    assert!(rex.processor_thread.lock().is_some());
+                    assert!(rex.refresh_thread.lock().is_some());
+                }
+                machine.stop();
+            })
+            .expect("spawn production Newport test")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    }
+
+    #[test]
+    #[ignore = "requires a validated Vulkan or D3D12 adapter"]
+    fn production_readback_mode_raises_frontend_capture_timeout() {
+        let nv = TempPath::dir("newport-readback-nv");
+        let nv_dir = nv.to_path_buf();
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                let mut cfg = production_config(&nv_dir);
+                cfg.graphics.newport_mode = Some(NewportWgpuMode::Readback);
+                let machine = Machine::try_new(cfg).expect("construct production resident machine");
+                let rex = machine.get_rex3().expect("primary Newport");
+                assert_eq!(
+                    GfxDisplay::minimum_frame_request_timeout(&*rex),
+                    std::time::Duration::from_secs(2)
+                );
+                assert!(!GfxDisplay::requires_same_device_wgpu_presenter(&*rex));
+            })
+            .expect("spawn production Newport test")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     }
 }
 

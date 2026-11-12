@@ -96,6 +96,32 @@ hashes are given where a change is easiest to understand by reading the commit.
 
 ### Newport: experimental live rendering on the host GPU
 
+- A `wgpu` build can now select the GPU-authoritative Newport backend with
+  `[graphics] raster = "wgpu"`. The default direct mode shares one validated
+  Vulkan or D3D12 device with the window presenter and both Newport heads.
+  It has no unsupported-operation or device-loss CPU fallback; direct startup
+  fails instead of silently choosing GL/CPU or another device. Explicit
+  `newport_mode = "readback"` retains the ordinary compositor as a slow
+  validation/compatibility path and attributes its full two-plane 16 MiB
+  observations separately.
+- Production startup now owns the resident processor/display workers,
+  snapshots and restore, CI rollback, reset/restart, screenshots, headless
+  capture and VNC. `rex status` names the mode, backend and adapter, states
+  `no_cpu_fallback=true`, and prints aggregate command, batch, GFIFO, latency
+  and transfer telemetry. CPU-only debug overlays are refused in direct mode
+  instead of freezing presentation. Dual-head snapshots always replace both
+  second-head planes, and malformed resident plane data now returns a restore
+  error rather than panicking.
+- iris-gui builds can opt into the core `wgpu` feature and run resident Newport
+  through explicit readback mode with either capture renderer. Direct mode
+  remains standalone-only until iris-gui has a same-device eframe presenter.
+  Embedded-PROM boots and captures, dual-head device sharing and the complete
+  130-case Vulkan+D3D12 gate pass. An installed IRIX 6.5 Indigo Magic desktop,
+  Showcase and Atlantis also render correctly on both direct backends.
+  Showcase canvas pixels match CPU raster exactly; in a 30-second Atlantis
+  sample, Vulkan and D3D12 improve live REX3 throughput by 42.1% and 24.3%
+  while using 5.9% and 7.7% less host CPU on the acceptance host. The mode
+  remains experimental while the application/adapter matrix is broadened.
 - A `rex-gpu` build renders Newport's flat fills on the host GPU when
   `IRIS_REX3_GPU=auto|vulkan|metal|dx12|gl` is set. It is experimental and off by
   default; without the variable a `rex-gpu` build renders as before, and
@@ -111,10 +137,9 @@ hashes are given where a change is easiest to understand by reading the commit.
   CPU and rendering continues there for the rest of the run.
 - The prototype now uses the common wgpu device and shares it with a wgpu
   window presenter instead of opening a second device. Its CPU-canonical
-  synchronization behavior is unchanged. Newport now rejects
-  `raster = "wgpu"` rather than silently ignoring it; that selector remains
-  unavailable until production activation is complete.
-- A separate, internal test-only resident path now exercises full linear RGB
+  synchronization behavior is unchanged. It remains separate from, and is
+  mutually exclusive with, production `raster = "wgpu"`.
+- The GPU-authoritative resident path exercises full linear RGB
   and auxiliary planes, GFIFO-ordered drawing, staged HostW blocks, spans and
   integer/fractional/antialiased lines, and same-device scanout. HostW
   transfers preserve shade, transparent/opaque patterns, endpoint skips,
@@ -160,10 +185,8 @@ hashes are given where a change is easiest to understand by reading the commit.
   replayed on Vulkan and D3D12 with zero read differences or unsupported
   operations. Measurements retain 8 x 8 tiles, GPU-generated active-tile
   dispatch, 1,024 state slots, three reusable sets and full selected-plane
-  HostR snapshots. It is not selectable in the emulator; production activation
-  and representative IRIX application performance remain future work. Cached
-  decoded DID uploads still make direct scanout's small-state/GPU-DID
-  milestone partial.
+  HostR snapshots. Production activation is now selectable as described
+  above; representative IRIX application performance remains future work.
 - A strict synthetic REX3 replay corpus (`src/dev/ng1/testdata`) checks the
   interpreter, the Cranelift JIT and the GPU engine against one another; Linux
   CI runs its CPU half. See `TESTING.md`.

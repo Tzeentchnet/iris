@@ -528,7 +528,7 @@ How each board uses it:
 
 | Board | Producer side (CPU / VDMA) | Consumers |
 |---|---|---|
-| Newport (`src/dev/ng1/`) | REX3 register writes, GO commands, HOSTRW data | `REX3-Processor` executes REX3 drawing; `REX3-Refresh` composites VC2/XMAP/CMAP scanout and owns the GL context |
+| Newport (`src/dev/ng1/`) | REX3 register writes, GO commands, HOSTRW data | CPU raster uses `REX3-Processor` and `REX3-Refresh`; GPU-authoritative raster uses `REX3-Resident-Processor` and a fixed direct-wgpu or readback-compatibility `REX3-Resident-Display` worker |
 | GR2 (`src/dev/gr2/`) | HQ2 command FIFO (`hq_fifo`) | `GR2-HQ2` interprets HQ2/GE commands at the GL level and feeds `re3_fifo`; `GR2-RE3` rasterises; `GR2-Display` scans out |
 | IMPACT (`src/dev/mgras/`) | HQ3 command FIFO and direct raster writes (`hq_fifo`) | `MGRAS-HQ3` runs the command and geometry front end and feeds `rss_fifo`; one RSS thread per raster engine draws (Maximum IMPACT: two, each owning alternate rows, fed by the broadcast FIFO; `IRIS_MGRAS_ENGINES` of 1, 2 or 4 overrides, and a GPU raster unit uses one); `MGRAS-Refresh` scans out |
 | VPro (`src/dev/odyssey/`) | the command FIFO (`fifo.rs`) | `odyssey-work` decodes, transforms and sets primitives up and hands them to the raster queue; `odyssey-raster` and its `odyssey-pool` tile workers rasterise, texture and store; the display thread scans out. With `[graphics] raster = "wgpu"` the raster and pool threads do not start: the front end records into batches the host GPU draws (below) |
@@ -540,14 +540,11 @@ three boards have optional JITs (`rex-jit`, `gr2-jit`, `gr4-jit`) that
 compile pixel pipelines with Cranelift; the interpreter remains the
 reference, and each JIT has an equivalence test against it.
 
-The optional `rex-gpu` feature builds on `rex-dirty-upload` and adds a wgpu
-path for Newport flat fills on the `REX3-Processor` thread. It is used by
+The optional `rex-gpu` feature builds on `rex-dirty-upload` and adds the older
+wgpu path for Newport flat fills on the `REX3-Processor` thread. It is used by
 recording replay and, only when `IRIS_REX3_GPU` is set, by the experimental
-live renderer. It uses the common `wgpu` feature's `Arc<Gpu>` below and
-exposes that device to the wgpu window presenter. The prototype still keeps
-the CPU framebuffer canonical and synchronizes through it; sharing the device
-does not make this the authoritative-buffer mode described in
-`clanker/plans/GPUTodo.md`.
+CPU-canonical live renderer. It is deliberately separate from production
+`[graphics] raster = "wgpu"` and the two selectors are mutually exclusive.
 
 The CPU framebuffer stays canonical at every observation point. Supported
 fills are batched; the engine synchronizes (reads the GPU work back into the
@@ -577,18 +574,33 @@ without locks and composes it through the board's colour maps and DAC.
 Everything that touches the host GL context (including teardown) runs on the
 thread that owns it.
 
-### Newport resident GPU foundation (tests only)
+### Newport resident GPU backend
 
-The separate resident raster in `src/dev/ng1/wgpu/resident.rs` is an
-experimental test-only path, not the `rex-gpu` prototype or a configuration
-option. A stopped, idle, exclusively owned board can seed its complete linear
-2048 x 1024 RGB and auxiliary planes once on an injected common `Arc<Gpu>`.
-The real GFIFO processor then uses bounded, ordered batches of supported flat
-fills, writing only columns 0 through 1343 and leaving the rest of each
-plane intact. It never falls back to CPU raster; an unsupported draw submits
-the accepted prefix before latching a typed error. GPU failures also latch
-typed errors. The ordinary start does not create a resident refresh thread;
-tests may explicitly start a resident display worker on the injected device.
+The resident raster in `src/dev/ng1/wgpu/resident.rs` is the experimental
+GPU-authoritative production path selected by `[graphics] raster = "wgpu"`;
+it is not the `rex-gpu` prototype. Machine construction creates one validated
+Vulkan or D3D12 `Arc<Gpu>`, shares it across both Newport heads, and activates
+each board while it is still exclusively owned. Activation seeds complete
+linear 2048 x 1024 RGB and auxiliary planes before the board is published.
+
+The GFIFO processor then uses bounded ordered batches for the complete
+resident command set and never falls back to CPU raster. Unsupported work
+submits the accepted prefix before latching a typed fatal error; device loss
+is sticky and reaches machine control once. Production `Device::start`
+automatically starts the processor and the fixed direct-wgpu or explicit
+readback-compatibility display worker. Start is idempotent because CI mode can
+start peripherals once while the CPU is parked and again when the guest is
+released. Tests retain an injected-backend/manual-display seam so lifecycle
+and failure policy can be checked without constructing a physical GPU.
+
+Direct mode rejects CPU-plane debug overlays (`rex cmap on`, `disp debug on`
+and the developer `draw debug on`) before changing their state; leaving one
+enabled would otherwise make every direct presentation fail. Explicit
+readback mode retains those overlays. Disk snapshots always rewrite the second
+head's two named planes, including under CPU raster, so reusing a snapshot name
+cannot mix current registers with stale resident planes. Missing, truncated or
+failed resident plane restores propagate as snapshot errors rather than
+panicking a service thread.
 
 The first M3 slice routes those fills through the command ABI that later
 opcodes extend: one fixed 64-byte command names a 256-byte normalized REX3
@@ -771,10 +783,10 @@ Each activation or quiescent reset establishes a new epoch. Typed stream
 positions distinguish accepted, submitted and callback-confirmed work; each
 plane separately records its last possible write and whether its CPU shadow is
 current. Supported no-op fills advance the stream and REX3 context without
-changing a plane generation. A same-device, read-only binding seam exists for
-the test-only direct compositor (the two planes only; display metadata is
-bound separately). The binding is epoch-tagged and does not submit raster
-work. The test-only display worker inserts a typed GFIFO frame marker and
+changing a plane generation. A same-device, read-only binding seam exposes the
+two authoritative planes to direct scanout; display metadata is bound
+separately. The binding is epoch-tagged and does not submit raster work. The
+resident display worker inserts a typed GFIFO frame marker and
 holds the consumer at that cut while it submits the exact resident prefix,
 composes from the resident planes, and queues same-device presentation and
 optional composed-output readback. Later draws cannot overtake the scanout.
@@ -788,8 +800,8 @@ dimension changes on Vulkan and D3D12. A mode-table fence published after the
 cut defers the frame rather than forcing fence progress or presenting stale
 state. The real common wgpu presenter is tested with a winit window and
 surface on the resident device on both backends; it presents the composed
-buffer without a plane transfer. The test-only display selection is a fixed
-typed `DirectWgpu` or `ReadbackCompatibility` mode; renderer rejection,
+buffer without a plane transfer. Production and test display selection is a
+fixed typed `DirectWgpu` or `ReadbackCompatibility` mode; renderer rejection,
 capture demand and capture failure never switch it. The explicitly selected
 compatibility display attributes a full two-plane observation to
 `Compatibility`, copies the 16 MiB snapshot into a separate CPU screen cache
@@ -804,9 +816,10 @@ After the initial seed, ordinary resident frames and idle/fence processing
 perform no raw-plane transfer, CPU-plane access or CPU raster fallback.
 Raw-plane observations explicitly select RGB, auxiliary or both, and return
 attributed snapshots; installing and acknowledging a CPU shadow is a separate
-operation. Board-level HOSTR, snapshots, recording and other raw consumers are
-not wired up while resident. The idle processor polls the device error sink,
-and the first fault is sent once through the machine's fatal channel.
+operation. Board-level HostR, snapshots, recording and monitor consumers use
+that boundary and report their reason and bytes. The idle processor polls the
+device error sink, and the first fault is sent once through the machine's
+fatal channel.
 Fatal GPU errors reject reset and restart before touching CPU planes; a
 successful quiescent reset after a recoverable rejection rearms notification.
 Stopped resident snapshots take one lifecycle write lock against PIO, DMA and
@@ -844,11 +857,21 @@ completion and 0.26 ms for the frame cut with no capture readback. HostR was
 four operations and reused two selected-plane maps, so the measured design
 keeps full-plane HostR snapshots. The same evidence retains 8 x 8 tiles,
 GPU-generated active-tile dispatch, 1,024 state slots and three reusable sets.
-These are gated replay measurements, not production IRIX application timing.
+These are replay measurements, not representative IRIX application timing.
 
-Newport still rejects `[graphics] raster = "wgpu"` until production activation;
-live frontend integration remains future work. The legacy prototype remains
-CPU-canonical.
+Production activation accepts `[graphics] raster = "wgpu"` only in a `wgpu`
+build and initially only when the resolved backend is Vulkan or D3D12. Direct
+mode requires a visible same-device wgpu presenter and fails startup rather
+than falling back to GL or CPU raster. Explicit readback compatibility is
+fixed at startup and allows a two-second fresh-frame request because its first
+16 MiB observation may exceed the frontend's historical 250 ms timeout.
+Machine construction shares one device across Newport heads, automatic
+processor/display startup is idempotent, and `rex status` reports the
+backend, adapter, no-fallback policy and aggregate telemetry. Embedded-PROM
+boots, direct and readback captures, loopback VNC, dual-head construction,
+disk restore, CI rollback and reset/restart have run in production mode.
+Representative IRIX desktop/application performance remains open. The legacy
+prototype remains CPU-canonical and mutually exclusive.
 
 Residency tests can opt into replacing each CPU shadow with its own
 page-aligned OS mapping before the seed. Scoped no-access protection,
@@ -1034,11 +1057,13 @@ board it is. The display thread leaves the composed guest frame in
 compose on the CPU and do this every frame, as do IMPACT and VPro unless the
 window's renderer takes GPU frames (above). Newport composes inside the window's
 renderer, so it fills `rgba` only when asked: `request_frame` for one frame,
-`set_capture(true)` for every frame while a consumer (VNC) watches. In normal
-Newport operation, continuous capture switches the GL window to its software
-compositor, while a wgpu window reads its composed GPU output. With no window
-(`--ci`) the refresh thread composes in software itself. The test-only resident
-display also reads its composed GPU output, as described above.
+`set_capture(true)` for every frame while a consumer (VNC) watches. In CPU-raster Newport operation, continuous capture switches the GL window to
+its software compositor, while a wgpu window reads its composed GPU output.
+With no window (`--ci`) the CPU refresh thread composes in software itself.
+Direct resident Newport instead reads requested composed output from the
+resident scanout buffer; its ordinary frames stay on the shared GPU. Explicit
+resident readback compatibility observes both complete raw planes into a
+separate CPU cache before using the ordinary renderer.
 `copy_frame`/`fresh_frame` are the helpers that read it.
 
 Nothing downstream looks inside the drawing code. The VNC server

@@ -1,12 +1,16 @@
 # REX3 proper GPU mode: implementation plan
 
-Status: in progress 2026-11-11. M0-M7 are complete for the gated, test-only
-resident path. The M8 telemetry, latency bound and measurement-driven layout
-decisions are implemented; production activation and application-level M8
-acceptance remain open. No production GPU-authoritative Newport mode has
-landed, and live `raster = "wgpu"` remains rejected. The tile-binned
-`IRIS_REX3_GPU` prototype is separate and CPU-canonical, not the target
-architecture.
+Status: complete 2026-11-12. M0-M10 implementation, experimental production
+activation and representative application acceptance are complete for the
+standalone `iris` frontend.
+`[graphics] raster = "wgpu"` now selects the GPU-authoritative Newport path,
+with direct same-device presentation by default and explicit readback
+compatibility when requested. The exact dual-backend gate and the production
+lifecycle matrix pass on Vulkan and D3D12. An installed IRIX 6.5 desktop,
+Showcase and the animated Atlantis demo also pass on CPU raster and both
+resident backends with matching pixels, zero unsupported work, no fallback,
+bounded presentation latency and better live command throughput. The
+tile-binned `IRIS_REX3_GPU` prototype remains separate and CPU-canonical.
 
 ## Goal
 
@@ -65,11 +69,14 @@ without fallback or routine readback.
 The renderer and rasterizer selections remain independent, but a user asking
 for the proper accelerated path receives wgpu for both.
 
-This is the target matrix, not a current Newport selector: normal Newport
-supports CPU raster with GL/CPU or wgpu composition. Its separate
-`IRIS_REX3_GPU` experiment is CPU-canonical. The resident wgpu raster and
-direct scanout are internal tests only, and the readback compatibility mode
-is not implemented as a live option.
+This matrix is now available in the standalone `iris` frontend. Newport
+`raster = "wgpu"` defaults to direct same-device wgpu presentation and fails
+startup rather than falling back to GL/CPU. `newport_mode = "readback"`
+explicitly selects the slow compatibility path. The separate
+`IRIS_REX3_GPU` experiment remains CPU-canonical and mutually exclusive.
+`iris-gui` still lacks a direct eframe wgpu presenter and therefore cannot
+host the proper visible direct mode. A build with the iris-gui `wgpu` feature
+can deliberately host resident Newport through `newport_mode = "readback"`.
 
 ## Existing evidence and prior art
 
@@ -512,9 +519,9 @@ of the updated main branch, so none were cherry-picked. Main uses upstream
 wgpu 30.0.1 and has no active vendored wgpu-core override to preserve. The
 legacy `rex-gpu` prototype now builds on the common `Arc<Gpu>` and exposes it
 through `GfxDisplay`, so a wgpu window reuses the same device. The prototype
-still synchronizes through its CPU-canonical framebuffer. Newport explicitly
-rejects `raster = "wgpu"` until production activation rather than silently treating
-that selection as CPU raster.
+still synchronizes through its CPU-canonical framebuffer. The later
+production activation gives Newport `raster = "wgpu"` its distinct
+GPU-authoritative meaning rather than selecting this prototype.
 
 ### M1 - Full authoritative GPU planes
 
@@ -554,7 +561,7 @@ consumers; the legacy `rex-gpu` replay/live prototype remains CPU-canonical.
 Complete when a GPU-rendered live frame reaches the window with zero
 framebuffer readback and without a CPU plane upload.
 
-Partial, test-only: a read-only same-device binding and GFIFO frame marker
+The original gated slice established a read-only same-device binding and GFIFO frame marker to
 order resident fills, direct scanout and a GPU frame consumer. Screenshot,
 frame-request, headless and VNC tests capture composed output only. Ordinary
 frames after seeding have zero raw-plane upload/readback, CPU-plane access
@@ -571,12 +578,12 @@ and D3D12. An explicit compatibility display attributes a complete two-plane
 observation to `Compatibility`, copies the snapshots into a separate CPU
 screen cache, and calls the ordinary renderer without acknowledging the
 board's stale CPU shadows. Its 16 MiB full-plane readback per frame is
-deliberately slow and never an automatic fallback. M2 is complete within this
-gated test-only scope. Live activation remains gated on production
-configuration and lifecycle integration, and `iris-gui` cannot select this
-mode.
+deliberately slow and never an automatic fallback. Production activation now
+wires both fixed modes into the standalone frontend. Direct visible windows
+require the same-device wgpu presenter; CI capture uses direct offscreen
+scanout. `iris-gui` still cannot select visible direct mode.
 
-The Windows gate `.\scripts\test-resident-gate.ps1` checks 129 cases: 43
+The Windows gate `.\scripts\test-resident-gate.ps1` checks 130 cases: 44
 resident CPU, 4 flat-fill, 2 line, 1 shade-DDA, 1 pattern-state, 3 command-ABI
 and 2 direct-state tests, 2 HostW walker tests, 1 HostW interpreter/JIT source
 oracle, 2 resident HostR port/retirement tests, plus 24 resident GPU and 10
@@ -597,10 +604,16 @@ when unavailable; a single-backend run is not the complete gate. See
       dithering.
 - [x] Implement screen-to-screen copies and overlap hazards.
 - [x] Implement continuation and empty/no-op context behavior.
-- [ ] Remove the production CPU framebuffer fallback path.
+- [x] Remove the production CPU framebuffer fallback path.
 
 Complete when the strict corpus and representative live workloads report zero
 unsupported or CPU-fallback draws.
+
+Production activation is fail-closed: unsupported commands and device loss
+stop the machine rather than executing against CPU framebuffer shadows. The
+embedded-PROM workload reports zero unsupported commands on Vulkan and D3D12;
+the installed IRIX 6.5 desktop, Showcase and Atlantis acceptance workloads
+also report zero unsupported commands on both backends.
 
 The first M3 infrastructure slice is complete in the gated test-only backend.
 Its Rust and WGSL sides share a fixed 64-byte `RexCommand` and 256-byte
@@ -853,9 +866,10 @@ through wgpu scanout, resident planes through same-device wgpu scanout and
 resident readback through the ordinary CPU renderer. Capture tickets are
 coalesced at the frame cut, newer tickets remain pending, and failures neither
 publish stale pixels nor advance `frame_seq`. The complete screenshot,
-headless frame and loopback VNC cases run in both resident modes. Live
-frontend integration remains open; no production selector exposes either
-resident mode yet.
+headless frame and loopback VNC cases run in both resident modes. The
+production selector now exposes both modes with the same fixed-mode and
+no-fallback rules; a live direct VNC session captures composed output without
+compatibility raw-plane traffic.
 
 ### M7 - Snapshot, reset and failure lifecycle
 
@@ -953,14 +967,84 @@ that GPU-generated dispatch matched the busy list. Measurements therefore
 retain 8 x 8 tiles, GPU-generated active-tile dispatch, 1,024 state slots,
 three reusable sets and full selected-plane HostR snapshots.
 
-The exact 129-case Vulkan+D3D12 gate covers the scheduling change and includes
+The exact 130-case Vulkan+D3D12 gate covers the scheduling change and includes
 an independent mixed workload with fills, copies, all line families, HostW,
 HostR, direct presentation and explicit observation. The M8 implementation
-checklist is complete within the gated backend. Its milestone acceptance for
-normal use remains open until the production path runs representative IRIX
-desktop applications and satisfies the end-to-end throughput, CPU-use and
-frame-rate criteria below; the embedded PROM capture does not claim that
-coverage.
+checklist is complete within the gated backend. The production path has now
+also passed the representative IRIX desktop/application and end-to-end
+throughput, CPU-use and presentation-latency acceptance described below.
+
+### M9/M10 - Production activation and frontend
+
+- [x] Compile the resident command, raster, scanout, telemetry and lifecycle
+      paths in normal `wgpu` builds while retaining test-only fault probes.
+- [x] Add explicit `direct` and `readback` Newport modes; default to direct.
+- [x] Create one validated GPU and share it across both Newport heads.
+- [x] Seed authoritative planes before publishing each board.
+- [x] Start resident processor/display workers automatically and idempotently.
+- [x] Require a visible direct window to use the same-device wgpu presenter.
+- [x] Fail startup instead of falling back to GL, CPU raster or another GPU.
+- [x] Wire HostR, snapshots, rollback, reset, screenshots, CI and VNC through
+      explicit attributed observation boundaries.
+- [x] Report mode, backend, adapter, no-fallback policy and telemetry at run
+      time.
+- [x] Expose explicit readback compatibility through both iris-gui capture
+      renderers while keeping direct mode unavailable there.
+- [x] Validate production lifecycle on Vulkan and D3D12.
+- [x] Validate an installed IRIX desktop and representative applications on
+      CPU raster, Vulkan direct and D3D12 direct.
+
+Production configuration uses `[graphics] raster = "wgpu"` in a build with
+the `wgpu` feature. `newport_mode = "direct"` is the default.
+`newport_mode = "readback"` is an explicit slow compatibility/validation
+selection and never a fallback. Explicit Metal and GL resident backends are
+rejected; `auto` must resolve to Vulkan or D3D12. `IRIS_REX3_GPU` cannot be
+combined with this mode.
+
+Live embedded-PROM boots on Vulkan and D3D12 each accepted 7,319 operations
+and 204 architectural no-ops with zero unsupported work. Direct offscreen
+screenshots and a visible Vulkan same-device window succeeded without a
+compatibility-plane observation. Explicit readback succeeded with one
+attributed 16 MiB two-plane observation; the frontend grants this mode a
+two-second minimum fresh-frame timeout. A production RFB 3.8 client received a
+1282 x 1024 direct frame while telemetry showed direct composed captures and
+zero compatibility bytes.
+
+Ignored production regressions construct two Newport heads on both backends,
+require `Arc::ptr_eq` for their devices, and verify repeated start leaves both
+processor/display pairs alive. Live save, disk restore, in-memory CI rollback,
+power-on reset, restart and fresh captures pass on both backends. That matrix
+exposed a CI-handler stack overflow in the 1 MiB REX3 context reset; reset now
+initializes the context in place and has a default-service-thread regression.
+The exact 130-case Vulkan+D3D12 gate and all four supported feature checks pass
+after activation.
+
+Application acceptance used a clean IRIX 6.5 IP22 install with the 24-bit Indy
+graphics personality, Xsgi, 4Dwm and toolchest. The same scripted Showcase
+rectangle/ellipse workload produced an identical 450 x 450 RGB crop on CPU
+raster, Vulkan direct and D3D12 direct:
+`b733d604c1a34554578e69fd9874d9ab892a470d54e67428d6a7fc081eec4190`.
+Full-screen save/restore captures were byte-identical on each resident
+backend, and CI rollback reproduced the same saved frame.
+
+The animated Atlantis demo then exercised 12-bit RGB spans, shading, Z,
+dithering, clipping and double-source draws for a 30-second sample after a
+15-second warm-up on an RTX 5070 host with 16 logical CPUs:
+
+| Engine | REX3 GO/s | Host core equivalents | Throughput vs CPU | Host CPU vs CPU | Resident p95 presentation |
+|---|---:|---:|---:|---:|---:|
+| CPU raster/JIT | 4,761.5 | 1.673 | baseline | baseline | n/a |
+| Vulkan direct | 6,765.6 | 1.574 | +42.1% | -5.9% | <= 4.2 ms |
+| D3D12 direct | 5,918.0 | 1.545 | +24.3% | -7.7% | <= 1.1 ms |
+
+CPU throughput is the `GO TOTAL` delta; resident throughput is the accepted
+command delta. Host core equivalents are process CPU seconds divided by wall
+seconds. During both resident samples `unsupported=0`,
+`no_cpu_fallback=true`, and all raw/composed readback counters remained
+unchanged. Screenshots and snapshots were taken outside the timed interval and
+remained explicitly attributed. This completes the normal-use acceptance gate
+for the supported workload set; the mode remains experimental pending review
+and broader deployment rather than an unfinished roadmap item.
 
 ## Validation requirements
 
@@ -1016,21 +1100,18 @@ criteria:
 Do not require high GPU utilization. A lightly used GPU at base clock is an
 expected result when the emulated guest CPU is the producer bottleneck.
 
-## Open implementation questions
+## Follow-on questions
 
-These are engineering choices to settle with prototypes or measurements, not
-reasons to change the architecture:
+The implementation and acceptance questions settled by M0-M10 are recorded
+above. Remaining work is optional frontend or platform expansion:
 
-- exact common-wgpu commit/base to port into the current branch;
-- linear versus tile-major framebuffer storage after routine checkpoints are
-  removed;
-- command and state-slot packing;
-- active-tile list versus full-screen dispatch;
-- batch time limit that balances submission overhead and latency;
-- full-plane versus region HOSTR readback after real frequency measurements;
-- how `iris-gui` selects or hosts its wgpu renderer;
-- carrying the gated fatal/restart policy through the production lifecycle; and
-- which backend becomes the first supported default after validation.
+- how `iris-gui` selects or hosts a same-device eframe wgpu renderer;
+- how broadly to expand the IRIX application and host-adapter matrix before a
+  default change;
+- whether Metal can satisfy the same completion, destruction and lifecycle
+  gate before it is allowed; and
+- whether measurements justify enabling the experimental path by default in a
+  later release.
 
 Geometry offload and native GL/wgpu texture sharing are not open questions.
 They are out of scope unless new evidence changes the maintainer's decision.
@@ -1053,3 +1134,9 @@ REX3 GPU mode is ready to consider for normal use only when:
    gates; and
 8. user documentation states the available raster/compositor combinations,
    fallback behavior and explicit readback costs.
+
+As of 2026-11-12, production wiring and evidence satisfy items 1-8 for the
+exercised command and application set. The implementation plan is complete.
+The mode stays experimental and opt-in while the stack is reviewed and tested
+on a broader application/adapter matrix; becoming the default is a separate
+release decision.

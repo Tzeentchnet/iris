@@ -210,7 +210,12 @@ fn main() {
         #[cfg(feature = "wgpu")]
         iris::wgpu::set_display(event_loop.owned_display_handle());
         let display = machine.get_display().expect("a graphics board must be present in non-headless mode");
-        let ui = Ui::new(machine.get_ps2(), display, machine.disc_changer(), machine.get_timer_manager(), &event_loop, scale, scroll_pixels_per_line, lock_aspect_ratio, ui_renderer);
+        let ui = Ui::new(machine.get_ps2(), display, machine.disc_changer(), machine.get_timer_manager(), &event_loop, scale, scroll_pixels_per_line, lock_aspect_ratio, ui_renderer)
+            .unwrap_or_else(|error| {
+                eprintln!("iris: cannot initialize the graphics window: {error}");
+                let _ = iris::workstation::stop_and_flush(&mut *machine, "graphics initialization failure");
+                std::process::exit(1);
+            });
         ui.run(event_loop);
     }
 
@@ -259,4 +264,3 @@ fn start_perfetto((path, cats, clock): (Option<String>, Option<String>, Option<S
 fn print_build_features() {
     eprintln!("iris: build features: {}", iris::build_features::banner());
 }
-
